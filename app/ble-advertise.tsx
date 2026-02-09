@@ -1,8 +1,9 @@
 import React, { useEffect, useState } from 'react';
 import { Alert, Button, PermissionsAndroid, Platform, StyleSheet, Text, TextInput, View } from 'react-native';
 import { BleManager } from 'react-native-ble-plx';
+import BlePeripheral from '../modules/BlePeripheral';
 
-// Unique Service UUID for Kela-Konnect
+// Kela-Konnect Service UUID (standardized format)
 const KELA_SERVICE_UUID = '0000FE00-0000-1000-8000-00805F9B34FB';
 
 export default function BLEAdvertiseScreen() {
@@ -13,11 +14,35 @@ export default function BLEAdvertiseScreen() {
   const [error, setError] = useState<string>('');
 
   useEffect(() => {
+    // Monitor Bluetooth state
     const subscription = bleManager.onStateChange((state) => {
       setBluetoothState(state);
     }, true);
 
-    return () => subscription.remove();
+    // Listen for advertising events
+    const startedListener = BlePeripheral.addListener('onAdvertisingStarted', (event) => {
+      console.log('✅ Advertising started:', event);
+      setAdvertising(true);
+      setError('');
+    });
+
+    const failedListener = BlePeripheral.addListener('onAdvertisingFailed', (event) => {
+      console.error('❌ Advertising failed:', event);
+      setError(`Failed: ${event.error}`);
+      setAdvertising(false);
+    });
+
+    const stoppedListener = BlePeripheral.addListener('onAdvertisingStopped', (event) => {
+      console.log('⏹️ Advertising stopped:', event);
+      setAdvertising(false);
+    });
+
+    return () => {
+      subscription.remove();
+      startedListener.remove();
+      failedListener.remove();
+      stoppedListener.remove();
+    };
   }, []);
 
   const requestPermissions = async () => {
@@ -63,30 +88,37 @@ export default function BLEAdvertiseScreen() {
     const hasPermissions = await requestPermissions();
     if (!hasPermissions) return;
 
-    setError('');
-    setAdvertising(true);
+    try {
+      setError('');
+      console.log(`📢 Starting to advertise as: ${deviceName}`);
 
-    console.log(`📢 Starting to advertise as: ${deviceName}`);
-    Alert.alert(
-      'Advertising Started',
-      `Your device is now broadcasting as "${deviceName}". Other Kela-Konnect devices nearby should be able to see you!`,
-      [{ text: 'OK' }]
-    );
+      await BlePeripheral.startAdvertising(deviceName, KELA_SERVICE_UUID);
 
-    // Note: react-native-ble-plx doesn't support peripheral mode directly
-    // We'll need to implement this with native modules in the future
-    // For now, this is a placeholder UI
+      Alert.alert(
+        '✅ Broadcasting Started!',
+        `Your device "${deviceName}" is now visible to other Kela-Konnect devices!`,
+        [{ text: 'OK' }]
+      );
+
+    } catch (error: any) {
+      console.error('❌ Start advertising error:', error);
+      setError(error.message || 'Failed to start advertising');
+    }
   };
 
-  const stopAdvertising = () => {
-    console.log('📢 Stopping advertising...');
-    setAdvertising(false);
-    Alert.alert('Advertising Stopped', 'Your device is no longer visible to other devices.');
+  const stopAdvertising = async () => {
+    try {
+      await BlePeripheral.stopAdvertising();
+      Alert.alert('Broadcasting Stopped', 'Your device is no longer visible.');
+    } catch (error: any) {
+      console.error('Stop error:', error);
+      setError(error.message || 'Failed to stop advertising');
+    }
   };
 
   return (
     <View style={styles.container}>
-      <Text style={styles.title}>📢 BLE Advertiser</Text>
+      <Text style={styles.title}>📢 BLE Advertiser (Native)</Text>
 
       <View style={styles.statusContainer}>
         <Text style={styles.statusLabel}>Bluetooth Status:</Text>
@@ -114,13 +146,17 @@ export default function BLEAdvertiseScreen() {
         </Text>
       </View>
 
-      <View style={styles.statusBox}>
+      <View style={[
+        styles.statusBox,
+        { backgroundColor: advertising ? '#E8F5E9' : '#FFF3E0', borderLeftColor: advertising ? '#4CAF50' : '#FF9800' }
+      ]}>
         <Text style={styles.statusBoxTitle}>
-          {advertising ? '✅ Broadcasting' : '⏸️ Not Broadcasting'}
+          {advertising ? '✅ Broadcasting (Native Module)' : '⏸️ Not Broadcasting'}
         </Text>
         {advertising && (
           <Text style={styles.statusBoxText}>
-            Other devices can now discover you as: {deviceName}
+            Broadcasting as: <Text style={styles.bold}>{deviceName}</Text>
+            {'\n'}Service UUID: {KELA_SERVICE_UUID}
           </Text>
         )}
       </View>
@@ -141,10 +177,12 @@ export default function BLEAdvertiseScreen() {
       </View>
 
       <View style={styles.infoBox}>
-        <Text style={styles.infoTitle}>ℹ️ Note:</Text>
+        <Text style={styles.infoTitle}>✨ Native Implementation</Text>
         <Text style={styles.infoText}>
-          BLE advertising (peripheral mode) requires native module implementation.
-          This screen demonstrates the UI - full functionality will be added in the next step.
+          Using custom Android native module for full BLE peripheral control.
+          {'\n\n'}• High-power advertising
+          {'\n'}• Custom service UUID
+          {'\n'}• Event-driven updates
         </Text>
       </View>
     </View>
@@ -214,12 +252,10 @@ const styles = StyleSheet.create({
     marginTop: 4,
   },
   statusBox: {
-    backgroundColor: '#E3F2FD',
     padding: 15,
     borderRadius: 8,
     marginBottom: 20,
     borderLeftWidth: 4,
-    borderLeftColor: '#2196F3',
   },
   statusBoxTitle: {
     fontSize: 18,
@@ -230,6 +266,11 @@ const styles = StyleSheet.create({
   statusBoxText: {
     fontSize: 14,
     color: '#666',
+    lineHeight: 20,
+  },
+  bold: {
+    fontWeight: 'bold',
+    color: '#333',
   },
   buttonContainer: {
     flexDirection: 'row',
@@ -237,11 +278,11 @@ const styles = StyleSheet.create({
     marginBottom: 20,
   },
   infoBox: {
-    backgroundColor: '#FFF3E0',
+    backgroundColor: '#E8EAF6',
     padding: 15,
     borderRadius: 8,
     borderLeftWidth: 4,
-    borderLeftColor: '#FF9800',
+    borderLeftColor: '#3F51B5',
   },
   infoTitle: {
     fontSize: 16,
@@ -252,6 +293,6 @@ const styles = StyleSheet.create({
   infoText: {
     fontSize: 14,
     color: '#666',
-    lineHeight: 20,
+    lineHeight: 22,
   },
 });
