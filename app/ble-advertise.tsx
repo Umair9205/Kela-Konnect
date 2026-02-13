@@ -2,16 +2,28 @@ import React, { useEffect, useState } from 'react';
 import { Alert, Button, PermissionsAndroid, Platform, StyleSheet, Text, TextInput, View } from 'react-native';
 import { BleManager } from 'react-native-ble-plx';
 import BlePeripheral from '../modules/BlePeripheral';
+import { useAppStore } from '../store/appStore';
 
-// Kela-Konnect Service UUID (standardized format)
 const KELA_SERVICE_UUID = '0000FE00-0000-1000-8000-00805F9B34FB';
 
 export default function BLEAdvertiseScreen() {
   const [bleManager] = useState(() => new BleManager());
-  const [advertising, setAdvertising] = useState(false);
+  const [advertising, setAdvertisingLocal] = useState(false);
   const [bluetoothState, setBluetoothState] = useState<string>('Unknown');
   const [deviceName, setDeviceName] = useState('');
   const [error, setError] = useState<string>('');
+
+  // Zustand store
+  const setAdvertising = useAppStore(state => state.setAdvertising);
+  const setMyDeviceInfo = useAppStore(state => state.setMyDeviceInfo);
+  const myStoredName = useAppStore(state => state.myDeviceName);
+
+  // Load stored name on mount
+  useEffect(() => {
+    if (myStoredName) {
+      setDeviceName(myStoredName);
+    }
+  }, [myStoredName]);
 
   useEffect(() => {
     // Monitor Bluetooth state
@@ -22,6 +34,7 @@ export default function BLEAdvertiseScreen() {
     // Listen for advertising events
     const startedListener = BlePeripheral.addListener('onAdvertisingStarted', (event) => {
       console.log('✅ Advertising started:', event);
+      setAdvertisingLocal(true);
       setAdvertising(true);
       setError('');
     });
@@ -29,11 +42,13 @@ export default function BLEAdvertiseScreen() {
     const failedListener = BlePeripheral.addListener('onAdvertisingFailed', (event) => {
       console.error('❌ Advertising failed:', event);
       setError(`Failed: ${event.error}`);
+      setAdvertisingLocal(false);
       setAdvertising(false);
     });
 
     const stoppedListener = BlePeripheral.addListener('onAdvertisingStopped', (event) => {
       console.log('⏹️ Advertising stopped:', event);
+      setAdvertisingLocal(false);
       setAdvertising(false);
     });
 
@@ -73,7 +88,7 @@ export default function BLEAdvertiseScreen() {
     return true;
   };
 
-  const startAdvertising = async () => {
+  const startAdvertisingHandler = async () => {
     if (!deviceName.trim()) {
       Alert.alert('Name Required', 'Please enter a device name to advertise');
       return;
@@ -93,6 +108,13 @@ export default function BLEAdvertiseScreen() {
       console.log(`📢 Starting to advertise as: ${deviceName}`);
 
       await BlePeripheral.startAdvertising(deviceName, KELA_SERVICE_UUID);
+
+      // Get the actual Bluetooth MAC address
+      const deviceId = await bleManager.state(); // This is a placeholder
+      // In production, you'd get the actual MAC from native module
+      
+      // Save to store
+      await setMyDeviceInfo('BLE-' + Date.now().toString(36), deviceName);
 
       Alert.alert(
         '✅ Broadcasting Started!',
@@ -118,7 +140,7 @@ export default function BLEAdvertiseScreen() {
 
   return (
     <View style={styles.container}>
-      <Text style={styles.title}>📢 BLE Advertiser (Native)</Text>
+      <Text style={styles.title}>📢 BLE Advertiser</Text>
 
       <View style={styles.statusContainer}>
         <Text style={styles.statusLabel}>Bluetooth Status:</Text>
@@ -151,12 +173,11 @@ export default function BLEAdvertiseScreen() {
         { backgroundColor: advertising ? '#E8F5E9' : '#FFF3E0', borderLeftColor: advertising ? '#4CAF50' : '#FF9800' }
       ]}>
         <Text style={styles.statusBoxTitle}>
-          {advertising ? '✅ Broadcasting (Native Module)' : '⏸️ Not Broadcasting'}
+          {advertising ? '✅ Broadcasting' : '⏸️ Not Broadcasting'}
         </Text>
         {advertising && (
           <Text style={styles.statusBoxText}>
             Broadcasting as: <Text style={styles.bold}>{deviceName}</Text>
-            {'\n'}Service UUID: {KELA_SERVICE_UUID}
           </Text>
         )}
       </View>
@@ -164,7 +185,7 @@ export default function BLEAdvertiseScreen() {
       <View style={styles.buttonContainer}>
         <Button
           title={advertising ? "📢 Broadcasting..." : "▶️ Start Broadcasting"}
-          onPress={startAdvertising}
+          onPress={startAdvertisingHandler}
           disabled={advertising || bluetoothState !== 'PoweredOn'}
           color="#4CAF50"
         />
@@ -180,9 +201,6 @@ export default function BLEAdvertiseScreen() {
         <Text style={styles.infoTitle}>✨ Native Implementation</Text>
         <Text style={styles.infoText}>
           Using custom Android native module for full BLE peripheral control.
-          {'\n\n'}• High-power advertising
-          {'\n'}• Custom service UUID
-          {'\n'}• Event-driven updates
         </Text>
       </View>
     </View>

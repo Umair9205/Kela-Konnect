@@ -1,31 +1,66 @@
+import * as ExpoDevice from 'expo-device';
 import React, { useEffect, useState } from 'react';
 import { Alert, Button, FlatList, PermissionsAndroid, Platform, StyleSheet, Text, View } from 'react-native';
-import { BleManager, Device } from 'react-native-ble-plx';
+import { BleManager } from 'react-native-ble-plx';
+import { useAppStore } from '../store/appStore';
+
+const KELA_SERVICE_UUID = '0000FE00-0000-1000-8000-00805F9B34FB';
+
+interface KelaDevice {
+  id: string;
+  name: string;
+  rssi: number;
+  lastSeen: Date;
+  isFriend: boolean;
+}
 
 export default function BLETestScreen() {
-  const [bleManager] = useState(() => new BleManager());
-  const [devices, setDevices] = useState<Device[]>([]);
+  const [bleManager, setBleManager] = useState<BleManager | null>(null);
+  const [devices, setDevices] = useState<KelaDevice[]>([]);
   const [scanning, setScanning] = useState(false);
   const [error, setError] = useState<string>('');
   const [bluetoothState, setBluetoothState] = useState<string>('Unknown');
+  const [isEmulator, setIsEmulator] = useState(false);
 
-  // Check Bluetooth state
+  // Zustand store
+  const addScannedDevice = useAppStore(state => state.addScannedDevice);
+  const isFriend = useAppStore(state => state.isFriend);
+
   useEffect(() => {
-    const subscription = bleManager.onStateChange((state) => {
-      setBluetoothState(state);
-      if (state === 'PoweredOff') {
-        Alert.alert('Bluetooth Off', 'Please turn on Bluetooth to scan for devices.');
+    const checkDevice = async () => {
+      const isDevice = await ExpoDevice.isDevice;
+      setIsEmulator(!isDevice);
+      
+      if (!isDevice) {
+        console.log('⚠️ Running on emulator - BLE not available');
+        setError('⚠️ BLE is not available on emulators. Please use a physical device.');
+        return;
       }
-    }, true);
 
-    return () => subscription.remove();
+      try {
+        const manager = new BleManager();
+        setBleManager(manager);
+
+        const subscription = manager.onStateChange((state) => {
+          setBluetoothState(state);
+          if (state === 'PoweredOff') {
+            Alert.alert('Bluetooth Off', 'Please turn on Bluetooth to scan for devices.');
+          }
+        }, true);
+
+        return () => subscription.remove();
+      } catch (err) {
+        console.error('❌ BLE initialization error:', err);
+        setError(`BLE initialization failed: ${err}`);
+      }
+    };
+
+    checkDevice();
   }, []);
 
-  // Request Bluetooth permissions on Android
   const requestPermissions = async () => {
     if (Platform.OS === 'android') {
       if (Platform.Version >= 31) {
-        // Android 12+
         try {
           const granted = await PermissionsAndroid.requestMultiple([
             PermissionsAndroid.PERMISSIONS.BLUETOOTH_SCAN,
@@ -38,7 +73,7 @@ export default function BLETestScreen() {
           );
 
           if (!allGranted) {
-            setError('❌ Permissions denied. Go to Settings > Apps > Kela-Konnect > Permissions and enable Bluetooth & Location.');
+            setError('❌ Permissions denied');
             return false;
           }
           return true;
@@ -47,7 +82,6 @@ export default function BLETestScreen() {
           return false;
         }
       } else {
-        // Android 11 and below
         try {
           const granted = await PermissionsAndroid.request(
             PermissionsAndroid.PERMISSIONS.ACCESS_FINE_LOCATION
@@ -64,12 +98,15 @@ export default function BLETestScreen() {
         }
       }
     }
-    return true; // iOS handles permissions differently
+    return true;
   };
 
-  // Start scanning for BLE devices
   const startScan = async () => {
-    // Check Bluetooth state first
+    if (!bleManager) {
+      Alert.alert('BLE Not Available', 'BLE is not available on this device.');
+      return;
+    }
+
     const state = await bleManager.state();
     if (state !== 'PoweredOn') {
       Alert.alert('Bluetooth Required', 'Please turn on Bluetooth and try again.');
@@ -83,53 +120,101 @@ export default function BLETestScreen() {
     setError('');
     setScanning(true);
 
-    console.log('🔵 Starting BLE scan...');
+    console.log('🔵 Starting filtered scan for Kela-Konnect devices...');
+    console.log(`🔍 Looking for UUID: ${KELA_SERVICE_UUID}`);
 
-    bleManager.startDeviceScan(null, null, (error, device) => {
-      if (error) {
-        console.error('❌ Scan error:', error);
-        setError(`Scan error: ${error.message}`);
-        setScanning(false);
-        return;
+    bleManager.startDeviceScan(
+      [KELA_SERVICE_UUID],
+      null,
+      (error, device) => {
+        if (error) {
+          console.error('❌ Scan error:', error);
+          setError(`Scan error: ${error.message}`);
+          setScanning(false);
+          return;
+        }
+
+        if (device) {
+          console.log(`📡 Found Kela-Konnect device: ${device.name || 'Unnamed'} (${device.id})`);
+          
+          // Check if this device is a friend
+          const isDeviceFriend = isFriend(device.id);
+          
+          if (isDeviceFriend) {
+            console.log(`👥 Found FRIEND: ${device.name}`);
+          }
+
+          // Add to store
+          addScannedDevice({
+            id: device.id,
+            name: device.name || 'Unknown User',
+            rssi: device.rssi || -100,
+            lastSeen: new Date(),
+          });
+
+          setDevices((prevDevices) => {
+            const existingIndex = prevDevices.findIndex((d) => d.id === device.id);
+            
+            const newDevice: KelaDevice = {
+              id: device.id,
+              name: device.name || 'Unknown User',
+              rssi: device.rssi || -100,
+              lastSeen: new Date(),
+              isFriend: isDeviceFriend,
+            };
+
+            if (existingIndex >= 0) {
+              const updated = [...prevDevices];
+              updated[existingIndex] = newDevice;
+              return updated;
+            } else {
+              return [...prevDevices, newDevice];
+            }
+          });
+        }
       }
+    );
 
-      if (device) {
-        console.log(`📡 Found device: ${device.name || 'Unnamed'} (${device.id})`);
-        
-        setDevices((prevDevices) => {
-          // Avoid duplicates
-          const exists = prevDevices.find((d) => d.id === device.id);
-          if (exists) return prevDevices;
-          return [...prevDevices, device];
-        });
-      }
-    });
-
-    // Stop scanning after 10 seconds
     setTimeout(() => {
       console.log('⏹️ Stopping scan...');
       bleManager.stopDeviceScan();
       setScanning(false);
-    }, 10000);
+    }, 15000);
   };
 
-  // Stop scanning
   const stopScan = () => {
-    bleManager.stopDeviceScan();
-    setScanning(false);
-    console.log('⏹️ Scan stopped manually');
+    if (bleManager) {
+      bleManager.stopDeviceScan();
+      setScanning(false);
+      console.log('⏹️ Scan stopped manually');
+    }
   };
 
-  // Cleanup on unmount
   useEffect(() => {
     return () => {
-      bleManager.destroy();
+      if (bleManager) {
+        bleManager.destroy();
+      }
     };
-  }, []);
+  }, [bleManager]);
+
+  if (isEmulator) {
+    return (
+      <View style={styles.container}>
+        <Text style={styles.title}>🔵 Kela-Konnect Scanner</Text>
+        <View style={styles.emulatorWarning}>
+          <Text style={styles.emulatorTitle}>⚠️ Emulator Detected</Text>
+          <Text style={styles.emulatorText}>
+            BLE is not available on emulators. Please use a physical device.
+          </Text>
+        </View>
+      </View>
+    );
+  }
 
   return (
     <View style={styles.container}>
-      <Text style={styles.title}>🔵 BLE Scanner Test</Text>
+      <Text style={styles.title}>🔵 Kela-Konnect Scanner</Text>
       
       <View style={styles.statusContainer}>
         <Text style={styles.statusLabel}>Bluetooth Status:</Text>
@@ -145,13 +230,13 @@ export default function BLETestScreen() {
 
       <View style={styles.buttonContainer}>
         <Button 
-          title={scanning ? "⏳ Scanning..." : "▶️ Start Scan"} 
+          title={scanning ? "⏳ Scanning..." : "▶️ Find Nearby Users"} 
           onPress={startScan}
           disabled={scanning || bluetoothState !== 'PoweredOn'}
           color="#2196F3"
         />
         <Button 
-          title="⏹️ Stop Scan" 
+          title="⏹️ Stop" 
           onPress={stopScan}
           disabled={!scanning}
           color="#F44336"
@@ -159,32 +244,59 @@ export default function BLETestScreen() {
       </View>
 
       <Text style={styles.subtitle}>
-        📱 Found Devices ({devices.length}):
+        👥 Kela-Konnect Users Nearby ({devices.length}):
       </Text>
 
       <FlatList
         data={devices}
         keyExtractor={(item) => item.id}
         renderItem={({ item }) => (
-          <View style={styles.deviceItem}>
-            <Text style={styles.deviceName}>
-              {item.name || '❓ Unnamed Device'}
-            </Text>
-            <Text style={styles.deviceId}>ID: {item.id.substring(0, 20)}...</Text>
-            <Text style={styles.deviceRssi}>
-              📶 Signal: {item.rssi} dBm
+          <View style={[
+            styles.deviceItem,
+            { borderLeftColor: item.isFriend ? '#4CAF50' : '#2196F3' }
+          ]}>
+            <View style={styles.deviceHeader}>
+              <Text style={styles.deviceName}>
+                {item.isFriend ? '👥 ' : '👤 '}{item.name}
+              </Text>
+              <Text style={styles.deviceRssi}>
+                {item.rssi > -60 ? '📶📶📶' : item.rssi > -80 ? '📶📶' : '📶'}
+              </Text>
+            </View>
+            <Text style={styles.deviceId}>ID: {item.id.substring(0, 17)}...</Text>
+            <Text style={styles.deviceSignal}>
+              Signal: {item.rssi} dBm • {getDistance(item.rssi)}
+              {item.isFriend && ' • FRIEND'}
             </Text>
           </View>
         )}
         ListEmptyComponent={
-          <Text style={styles.emptyText}>
-            {scanning ? '🔍 Scanning for devices...' : '📭 No devices found. Press "Start Scan"'}
-          </Text>
+          <View style={styles.emptyContainer}>
+            <Text style={styles.emptyIcon}>🔍</Text>
+            <Text style={styles.emptyText}>
+              {scanning 
+                ? 'Searching for Kela-Konnect users nearby...' 
+                : 'No users found.\n\nMake sure other devices are broadcasting!'}
+            </Text>
+          </View>
         }
         style={styles.list}
       />
+
+      <View style={styles.infoBox}>
+        <Text style={styles.infoText}>
+          💡 Only shows devices running Kela-Konnect • Friends shown in green
+        </Text>
+      </View>
     </View>
   );
+}
+
+function getDistance(rssi: number): string {
+  if (rssi > -50) return 'Very Close (<1m)';
+  if (rssi > -70) return 'Close (1-5m)';
+  if (rssi > -90) return 'Medium (5-15m)';
+  return 'Far (15m+)';
 }
 
 const styles = StyleSheet.create({
@@ -200,6 +312,25 @@ const styles = StyleSheet.create({
     marginTop: 40,
     textAlign: 'center',
     color: '#333',
+  },
+  emulatorWarning: {
+    backgroundColor: '#FFF3E0',
+    padding: 20,
+    borderRadius: 12,
+    borderLeftWidth: 4,
+    borderLeftColor: '#FF9800',
+    marginTop: 20,
+  },
+  emulatorTitle: {
+    fontSize: 20,
+    fontWeight: 'bold',
+    color: '#E65100',
+    marginBottom: 12,
+  },
+  emulatorText: {
+    fontSize: 16,
+    color: '#666',
+    lineHeight: 22,
   },
   statusContainer: {
     flexDirection: 'row',
@@ -246,34 +377,60 @@ const styles = StyleSheet.create({
     padding: 15,
     marginBottom: 10,
     backgroundColor: '#fff',
-    borderRadius: 8,
+    borderRadius: 12,
     borderLeftWidth: 4,
-    borderLeftColor: '#2196F3',
     elevation: 2,
     shadowColor: '#000',
     shadowOffset: { width: 0, height: 2 },
     shadowOpacity: 0.1,
     shadowRadius: 4,
   },
+  deviceHeader: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    alignItems: 'center',
+    marginBottom: 8,
+  },
   deviceName: {
-    fontSize: 16,
+    fontSize: 18,
     fontWeight: 'bold',
     color: '#333',
-    marginBottom: 4,
+  },
+  deviceRssi: {
+    fontSize: 16,
   },
   deviceId: {
     fontSize: 12,
-    color: '#666',
+    color: '#999',
     marginBottom: 4,
   },
-  deviceRssi: {
+  deviceSignal: {
     fontSize: 12,
-    color: '#999',
+    color: '#666',
+  },
+  emptyContainer: {
+    alignItems: 'center',
+    marginTop: 60,
+  },
+  emptyIcon: {
+    fontSize: 64,
+    marginBottom: 20,
   },
   emptyText: {
     textAlign: 'center',
     color: '#999',
-    marginTop: 40,
     fontSize: 16,
+    lineHeight: 24,
+  },
+  infoBox: {
+    backgroundColor: '#E3F2FD',
+    padding: 12,
+    borderRadius: 8,
+    marginTop: 10,
+  },
+  infoText: {
+    fontSize: 14,
+    color: '#666',
+    textAlign: 'center',
   },
 });
