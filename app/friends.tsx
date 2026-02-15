@@ -57,12 +57,25 @@ export default function FriendsScreen() {
                 Added: {new Date(item.addedDate).toLocaleDateString()}
               </Text>
             </View>
-            <TouchableOpacity
-              style={styles.removeButton}
-              onPress={() => handleRemove(item.id)}
-            >
-              <Text style={styles.removeButtonText}>🗑️</Text>
-            </TouchableOpacity>
+            
+            <View style={styles.friendActions}>
+              <TouchableOpacity
+                style={styles.callButton}
+                onPress={() => router.push({
+                  pathname: '/call',
+                  params: { friendId: item.id, friendName: item.name }
+                })}
+              >
+                <Text style={styles.callButtonText}>📞</Text>
+              </TouchableOpacity>
+              
+              <TouchableOpacity
+                style={styles.removeButton}
+                onPress={() => handleRemove(item.id)}
+              >
+                <Text style={styles.removeButtonText}>🗑️</Text>
+              </TouchableOpacity>
+            </View>
           </View>
         )}
         ListEmptyComponent={
@@ -152,8 +165,28 @@ const styles = StyleSheet.create({
     fontSize: 11,
     color: '#bbb',
   },
+  friendActions: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 10,
+  },
+  callButton: {
+    backgroundColor: '#4CAF50',
+    width: 50,
+    height: 50,
+    borderRadius: 25,
+    justifyContent: 'center',
+    alignItems: 'center',
+    elevation: 2,
+  },
+  callButtonText: {
+    fontSize: 24,
+  },
   removeButton: {
-    padding: 10,
+    width: 50,
+    height: 50,
+    justifyContent: 'center',
+    alignItems: 'center',
   },
   removeButtonText: {
     fontSize: 24,

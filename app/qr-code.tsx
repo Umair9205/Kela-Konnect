@@ -1,12 +1,20 @@
 import { router } from 'expo-router';
 import React, { useEffect, useState } from 'react';
-import { StyleSheet, Text, TouchableOpacity, View } from 'react-native';
+import { ActivityIndicator, StyleSheet, Text, TouchableOpacity, View } from 'react-native';
 import QRCode from 'react-native-qrcode-svg';
 import { useAppStore } from '../store/appStore';
 
 export default function QRCodeScreen() {
-  const { myDeviceId, myDeviceName } = useAppStore();
+  const { myDeviceId, myDeviceName, loadFriends } = useAppStore();
   const [qrData, setQrData] = useState<string>('');
+  const [loading, setLoading] = useState(true);
+
+  useEffect(() => {
+    // Load friends data (which includes myDeviceInfo)
+    loadFriends().then(() => {
+      setLoading(false);
+    });
+  }, []);
 
   useEffect(() => {
     if (myDeviceId && myDeviceName) {
@@ -17,6 +25,7 @@ export default function QRCodeScreen() {
         app: 'kela-konnect'
       });
       setQrData(data);
+      console.log('📱 QR Data generated:', data);
     }
   }, [myDeviceId, myDeviceName]);
 
@@ -24,7 +33,17 @@ export default function QRCodeScreen() {
     router.push('/qr-scanner');
   };
 
-  if (!myDeviceId || !myDeviceName) {
+  if (loading) {
+    return (
+      <View style={styles.container}>
+        <Text style={styles.title}>📱 My QR Code</Text>
+        <ActivityIndicator size="large" color="#2196F3" />
+        <Text style={styles.loadingText}>Loading...</Text>
+      </View>
+    );
+  }
+
+  if (!myDeviceId || !myDeviceName || !qrData) {
     return (
       <View style={styles.container}>
         <Text style={styles.title}>📱 My QR Code</Text>
@@ -33,8 +52,14 @@ export default function QRCodeScreen() {
             ⚠️ Please set up your device first!
           </Text>
           <Text style={styles.errorHint}>
-            Go to Broadcast and enter your name to get started.
+            Go to "Broadcast Presence" and enter your name to get started.
           </Text>
+          <TouchableOpacity 
+            style={styles.setupButton}
+            onPress={() => router.push('/ble-advertise')}
+          >
+            <Text style={styles.setupButtonText}>Go to Setup</Text>
+          </TouchableOpacity>
         </View>
       </View>
     );
@@ -88,14 +113,20 @@ const styles = StyleSheet.create({
     flex: 1,
     padding: 20,
     backgroundColor: '#f5f5f5',
+    justifyContent: 'center',
   },
   title: {
     fontSize: 28,
     fontWeight: 'bold',
-    marginTop: 40,
-    marginBottom: 20,
+    marginBottom: 30,
     textAlign: 'center',
     color: '#333',
+  },
+  loadingText: {
+    marginTop: 20,
+    fontSize: 16,
+    color: '#666',
+    textAlign: 'center',
   },
   qrContainer: {
     backgroundColor: '#fff',
@@ -107,6 +138,7 @@ const styles = StyleSheet.create({
     shadowOffset: { width: 0, height: 2 },
     shadowOpacity: 0.1,
     shadowRadius: 8,
+    marginBottom: 20,
   },
   instruction: {
     fontSize: 16,
@@ -148,7 +180,6 @@ const styles = StyleSheet.create({
     backgroundColor: '#2196F3',
     padding: 18,
     borderRadius: 12,
-    marginTop: 30,
     elevation: 2,
   },
   scanButtonText: {
@@ -170,18 +201,32 @@ const styles = StyleSheet.create({
   },
   errorBox: {
     backgroundColor: '#FFEBEE',
-    padding: 20,
+    padding: 30,
     borderRadius: 12,
-    marginTop: 40,
+    alignItems: 'center',
   },
   errorText: {
     fontSize: 18,
     color: '#C62828',
     fontWeight: 'bold',
-    marginBottom: 10,
+    marginBottom: 15,
+    textAlign: 'center',
   },
   errorHint: {
     fontSize: 14,
     color: '#666',
+    textAlign: 'center',
+    marginBottom: 20,
+  },
+  setupButton: {
+    backgroundColor: '#4CAF50',
+    padding: 15,
+    borderRadius: 8,
+    marginTop: 10,
+  },
+  setupButtonText: {
+    color: '#fff',
+    fontSize: 16,
+    fontWeight: 'bold',
   },
 });
