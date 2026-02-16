@@ -12,8 +12,8 @@ export default function FriendsScreen() {
     loadFriends();
   }, []);
 
-  const handleRemove = async (friendId: string) => {
-    const friend = friends.find(f => f.id === friendId);
+  const handleRemove = async (bleAddress: string) => {
+    const friend = friends.find(f => f.bleAddress === bleAddress);
     if (!friend) return;
 
     Alert.alert(
@@ -24,7 +24,7 @@ export default function FriendsScreen() {
         {
           text: 'Remove',
           style: 'destructive',
-          onPress: () => removeFriend(friendId)
+          onPress: () => removeFriend(bleAddress)
         }
       ]
     );
@@ -35,10 +35,10 @@ export default function FriendsScreen() {
       <Text style={styles.title}>👥 Friends</Text>
 
       <TouchableOpacity 
-        style={styles.qrButton}
-        onPress={() => router.push('/qr-code')}
+        style={styles.scanButton}
+        onPress={() => router.push('/ble-test')}
       >
-        <Text style={styles.qrButtonText}>📱 Show My QR Code</Text>
+        <Text style={styles.scanButtonText}>🔍 Scan for Users</Text>
       </TouchableOpacity>
 
       <Text style={styles.subtitle}>
@@ -47,12 +47,12 @@ export default function FriendsScreen() {
 
       <FlatList
         data={friends}
-        keyExtractor={(item) => item.id}
+        keyExtractor={(item) => item.bleAddress}
         renderItem={({ item }) => (
           <View style={styles.friendItem}>
             <View style={styles.friendInfo}>
               <Text style={styles.friendName}>👤 {item.name}</Text>
-              <Text style={styles.friendId}>ID: {item.id}</Text>
+              <Text style={styles.friendId}>BLE: {item.bleAddress}</Text>
               <Text style={styles.friendDate}>
                 Added: {new Date(item.addedDate).toLocaleDateString()}
               </Text>
@@ -63,7 +63,10 @@ export default function FriendsScreen() {
                 style={styles.callButton}
                 onPress={() => router.push({
                   pathname: '/call',
-                  params: { friendId: item.id, friendName: item.name }
+                  params: { 
+                    friendId: item.bleAddress,  // Pass BLE MAC address
+                    friendName: item.name 
+                  }
                 })}
               >
                 <Text style={styles.callButtonText}>📞</Text>
@@ -71,7 +74,7 @@ export default function FriendsScreen() {
               
               <TouchableOpacity
                 style={styles.removeButton}
-                onPress={() => handleRemove(item.id)}
+                onPress={() => handleRemove(item.bleAddress)}
               >
                 <Text style={styles.removeButtonText}>🗑️</Text>
               </TouchableOpacity>
@@ -83,7 +86,7 @@ export default function FriendsScreen() {
             <Text style={styles.emptyIcon}>👥</Text>
             <Text style={styles.emptyText}>
               No friends yet!{'\n\n'}
-              Add friends by scanning their QR codes
+              Scan for nearby users and add them
             </Text>
           </View>
         }
@@ -92,7 +95,7 @@ export default function FriendsScreen() {
 
       <View style={styles.infoBox}>
         <Text style={styles.infoText}>
-          💡 You can only call users in your friends list
+          💡 Scan → Add Friends → Call Them!
         </Text>
       </View>
     </View>
@@ -113,14 +116,14 @@ const styles = StyleSheet.create({
     textAlign: 'center',
     color: '#333',
   },
-  qrButton: {
-    backgroundColor: '#FF9800',
+  scanButton: {
+    backgroundColor: '#2196F3',
     padding: 18,
     borderRadius: 12,
     marginBottom: 30,
     elevation: 2,
   },
-  qrButtonText: {
+  scanButtonText: {
     color: '#fff',
     fontSize: 18,
     fontWeight: 'bold',
@@ -157,9 +160,10 @@ const styles = StyleSheet.create({
     marginBottom: 4,
   },
   friendId: {
-    fontSize: 12,
+    fontSize: 11,
     color: '#999',
     marginBottom: 2,
+    fontFamily: 'monospace',
   },
   friendDate: {
     fontSize: 11,
@@ -171,10 +175,10 @@ const styles = StyleSheet.create({
     gap: 10,
   },
   callButton: {
-    backgroundColor: '#4CAF50',
     width: 50,
     height: 50,
     borderRadius: 25,
+    backgroundColor: '#4CAF50',
     justifyContent: 'center',
     alignItems: 'center',
     elevation: 2,

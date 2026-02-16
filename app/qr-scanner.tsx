@@ -1,5 +1,4 @@
 import { Camera, CameraView } from 'expo-camera';
-import { router } from 'expo-router';
 import React, { useEffect, useState } from 'react';
 import { Alert, StyleSheet, Text, TouchableOpacity, View } from 'react-native';
 import { useAppStore } from '../store/appStore';
@@ -17,52 +16,42 @@ export default function QRScannerScreen() {
     })();
   }, []);
 
-  const handleBarCodeScanned = async ({ data }: { data: string }) => {
-    if (scanned) return;
-    
-    setScanned(true);
+const handleBarCodeScanned = async ({ data }: { data: string }) => {
+  if (scanned) return;
+  
+  setScanned(true);
 
-    try {
-      const parsed = JSON.parse(data);
+  try {
+    const parsed = JSON.parse(data);
 
-      // Validate QR code is from Kela-Konnect
-      if (parsed.app !== 'kela-konnect') {
-        Alert.alert('Invalid QR Code', 'This is not a Kela-Konnect QR code');
-        setScanned(false);
-        return;
-      }
-
-      // Check if already friends
-      if (isFriend(parsed.id)) {
-        Alert.alert('Already Friends', `${parsed.name} is already in your friends list`);
-        setScanned(false);
-        return;
-      }
-
-      // Add as friend
-      await addFriend({
-        id: parsed.id,
-        name: parsed.name,
-        addedDate: new Date(),
-      });
-
-      Alert.alert(
-        '✅ Friend Added!',
-        `${parsed.name} has been added to your friends`,
-        [
-          {
-            text: 'OK',
-            onPress: () => router.back()
-          }
-        ]
-      );
-
-    } catch (error) {
-      console.error('QR scan error:', error);
-      Alert.alert('Error', 'Invalid QR code format');
+    // Validate QR code is from Kela-Konnect
+    if (parsed.app !== 'kela-konnect') {
+      Alert.alert('Invalid QR Code', 'This is not a Kela-Konnect QR code');
       setScanned(false);
+      return;
     }
-  };
+
+    // Check if already friends
+    if (isFriend(parsed.id)) {
+      Alert.alert('Already Friends', `${parsed.name} is already in your friends list`);
+      setScanned(false);
+      return;
+    }
+
+    // ⚠️ PROBLEM: QR code doesn't have BLE address!
+    // We need to get it from scanning first
+    Alert.alert(
+      'Scan Required',
+      'Please scan for nearby devices first to find their BLE address, then add them as friend',
+      [{ text: 'OK', onPress: () => setScanned(false) }]
+    );
+
+  } catch (error) {
+    console.error('QR scan error:', error);
+    Alert.alert('Error', 'Invalid QR code format');
+    setScanned(false);
+  }
+};
 
   if (hasPermission === null) {
     return (

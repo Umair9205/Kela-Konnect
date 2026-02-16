@@ -23,8 +23,9 @@ export interface BlePeripheralInterface {
   startAdvertising(deviceName: string, serviceUuid: string): Promise<void>;
   stopAdvertising(): Promise<boolean>;
   isAdvertising(): Promise<boolean>;
+  sendSignalToDevice(deviceAddress: string, signalData: string): Promise<boolean>;
   addListener(
-    eventType: 'onAdvertisingStarted' | 'onAdvertisingFailed' | 'onAdvertisingStopped',
+    eventType: 'onAdvertisingStarted' | 'onAdvertisingFailed' | 'onAdvertisingStopped' | 'onSignalReceived' | 'onDeviceConnected' | 'onDeviceDisconnected',
     listener: (event: any) => void
   ): any;
   removeAllListeners(): void;
@@ -43,6 +44,10 @@ const BlePeripheral: BlePeripheralInterface = {
     return BlePeripheralModule.isAdvertising();
   },
 
+  sendSignalToDevice: (deviceAddress: string, signalData: string) => {
+    return BlePeripheralModule.sendSignalToDevice(deviceAddress, signalData);
+  },
+
   addListener: (eventType, listener) => {
     return eventEmitter.addListener(eventType, listener);
   },
@@ -51,6 +56,9 @@ const BlePeripheral: BlePeripheralInterface = {
     eventEmitter.removeAllListeners('onAdvertisingStarted');
     eventEmitter.removeAllListeners('onAdvertisingFailed');
     eventEmitter.removeAllListeners('onAdvertisingStopped');
+    eventEmitter.removeAllListeners('onSignalReceived');
+    eventEmitter.removeAllListeners('onDeviceConnected');
+    eventEmitter.removeAllListeners('onDeviceDisconnected');
   },
 };
 

@@ -1,13 +1,14 @@
 import * as ExpoDevice from 'expo-device';
+import { router } from 'expo-router';
 import React, { useEffect, useState } from 'react';
-import { Alert, Button, FlatList, PermissionsAndroid, Platform, StyleSheet, Text, View } from 'react-native';
+import { Alert, Button, FlatList, PermissionsAndroid, Platform, StyleSheet, Text, TouchableOpacity, View } from 'react-native';
 import { BleManager } from 'react-native-ble-plx';
 import { useAppStore } from '../store/appStore';
 
 const KELA_SERVICE_UUID = '0000FE00-0000-1000-8000-00805F9B34FB';
 
 interface KelaDevice {
-  id: string;
+  id: string;              // BLE MAC address
   name: string;
   rssi: number;
   lastSeen: Date;
@@ -22,9 +23,8 @@ export default function BLETestScreen() {
   const [bluetoothState, setBluetoothState] = useState<string>('Unknown');
   const [isEmulator, setIsEmulator] = useState(false);
 
-  // Zustand store
-  const addScannedDevice = useAppStore(state => state.addScannedDevice);
   const isFriend = useAppStore(state => state.isFriend);
+  const addFriend = useAppStore(state => state.addFriend);
 
   useEffect(() => {
     const checkDevice = async () => {
@@ -137,26 +137,17 @@ export default function BLETestScreen() {
         if (device) {
           console.log(`📡 Found Kela-Konnect device: ${device.name || 'Unnamed'} (${device.id})`);
           
-          // Check if this device is a friend
           const isDeviceFriend = isFriend(device.id);
           
           if (isDeviceFriend) {
             console.log(`👥 Found FRIEND: ${device.name}`);
           }
 
-          // Add to store
-          addScannedDevice({
-            id: device.id,
-            name: device.name || 'Unknown User',
-            rssi: device.rssi || -100,
-            lastSeen: new Date(),
-          });
-
           setDevices((prevDevices) => {
             const existingIndex = prevDevices.findIndex((d) => d.id === device.id);
             
             const newDevice: KelaDevice = {
-              id: device.id,
+              id: device.id,  // BLE MAC address
               name: device.name || 'Unknown User',
               rssi: device.rssi || -100,
               lastSeen: new Date(),
@@ -188,6 +179,39 @@ export default function BLETestScreen() {
       setScanning(false);
       console.log('⏹️ Scan stopped manually');
     }
+  };
+
+  const handleAddFriend = async (device: KelaDevice) => {
+    try {
+      await addFriend({
+        id: device.name,  // Custom display ID
+        bleAddress: device.id,  // Real BLE MAC address
+        name: device.name,
+        addedDate: new Date(),
+      });
+
+      Alert.alert('✅ Friend Added!', `${device.name} has been added to your friends`);
+      
+      // Update local state
+      setDevices(prevDevices => 
+        prevDevices.map(d => 
+          d.id === device.id ? { ...d, isFriend: true } : d
+        )
+      );
+    } catch (error) {
+      console.error('Error adding friend:', error);
+      Alert.alert('Error', 'Failed to add friend');
+    }
+  };
+
+  const handleCall = (device: KelaDevice) => {
+    router.push({
+      pathname: '/call',
+      params: {
+        friendId: device.id,  // Pass BLE MAC address
+        friendName: device.name
+      }
+    });
   };
 
   useEffect(() => {
@@ -255,19 +279,39 @@ export default function BLETestScreen() {
             styles.deviceItem,
             { borderLeftColor: item.isFriend ? '#4CAF50' : '#2196F3' }
           ]}>
-            <View style={styles.deviceHeader}>
-              <Text style={styles.deviceName}>
-                {item.isFriend ? '👥 ' : '👤 '}{item.name}
-              </Text>
-              <Text style={styles.deviceRssi}>
-                {item.rssi > -60 ? '📶📶📶' : item.rssi > -80 ? '📶📶' : '📶'}
+            <View style={styles.deviceInfo}>
+              <View style={styles.deviceHeader}>
+                <Text style={styles.deviceName}>
+                  {item.isFriend ? '👥 ' : '👤 '}{item.name}
+                </Text>
+                <Text style={styles.deviceRssi}>
+                  {item.rssi > -60 ? '📶📶📶' : item.rssi > -80 ? '📶📶' : '📶'}
+                </Text>
+              </View>
+              <Text style={styles.deviceId}>MAC: {item.id}</Text>
+              <Text style={styles.deviceSignal}>
+                Signal: {item.rssi} dBm • {getDistance(item.rssi)}
+                {item.isFriend && ' • FRIEND'}
               </Text>
             </View>
-            <Text style={styles.deviceId}>ID: {item.id.substring(0, 17)}...</Text>
-            <Text style={styles.deviceSignal}>
-              Signal: {item.rssi} dBm • {getDistance(item.rssi)}
-              {item.isFriend && ' • FRIEND'}
-            </Text>
+            
+            <View style={styles.deviceActions}>
+              {!item.isFriend ? (
+                <TouchableOpacity
+                  style={styles.addButton}
+                  onPress={() => handleAddFriend(item)}
+                >
+                  <Text style={styles.addButtonText}>➕</Text>
+                </TouchableOpacity>
+              ) : (
+                <TouchableOpacity
+                  style={styles.callButton}
+                  onPress={() => handleCall(item)}
+                >
+                  <Text style={styles.callButtonText}>📞</Text>
+                </TouchableOpacity>
+              )}
+            </View>
           </View>
         )}
         ListEmptyComponent={
@@ -285,7 +329,7 @@ export default function BLETestScreen() {
 
       <View style={styles.infoBox}>
         <Text style={styles.infoText}>
-          💡 Only shows devices running Kela-Konnect • Friends shown in green
+          💡 Scan to find users • Add them as friends • Then call!
         </Text>
       </View>
     </View>
@@ -374,6 +418,9 @@ const styles = StyleSheet.create({
     flex: 1,
   },
   deviceItem: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    alignItems: 'center',
     padding: 15,
     marginBottom: 10,
     backgroundColor: '#fff',
@@ -384,6 +431,9 @@ const styles = StyleSheet.create({
     shadowOffset: { width: 0, height: 2 },
     shadowOpacity: 0.1,
     shadowRadius: 4,
+  },
+  deviceInfo: {
+    flex: 1,
   },
   deviceHeader: {
     flexDirection: 'row',
@@ -400,13 +450,41 @@ const styles = StyleSheet.create({
     fontSize: 16,
   },
   deviceId: {
-    fontSize: 12,
+    fontSize: 11,
     color: '#999',
     marginBottom: 4,
+    fontFamily: 'monospace',
   },
   deviceSignal: {
     fontSize: 12,
     color: '#666',
+  },
+  deviceActions: {
+    marginLeft: 10,
+  },
+  addButton: {
+    width: 50,
+    height: 50,
+    borderRadius: 25,
+    backgroundColor: '#4CAF50',
+    justifyContent: 'center',
+    alignItems: 'center',
+    elevation: 2,
+  },
+  addButtonText: {
+    fontSize: 24,
+  },
+  callButton: {
+    width: 50,
+    height: 50,
+    borderRadius: 25,
+    backgroundColor: '#2196F3',
+    justifyContent: 'center',
+    alignItems: 'center',
+    elevation: 2,
+  },
+  callButtonText: {
+    fontSize: 24,
   },
   emptyContainer: {
     alignItems: 'center',
