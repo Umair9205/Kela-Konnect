@@ -1,6 +1,6 @@
 import * as ExpoDevice from 'expo-device';
 import { router } from 'expo-router';
-import React, { useEffect, useState } from 'react';
+import React, { useEffect, useRef, useState } from 'react';
 import { Alert, Button, FlatList, PermissionsAndroid, Platform, StyleSheet, Text, TouchableOpacity, View } from 'react-native';
 import { BleManager } from 'react-native-ble-plx';
 import { useAppStore } from '../store/appStore';
@@ -8,7 +8,7 @@ import { useAppStore } from '../store/appStore';
 const KELA_SERVICE_UUID = '0000FE00-0000-1000-8000-00805F9B34FB';
 
 interface KelaDevice {
-  id: string;              // BLE MAC address
+  id: string;
   name: string;
   rssi: number;
   lastSeen: Date;
@@ -22,6 +22,9 @@ export default function BLETestScreen() {
   const [error, setError] = useState<string>('');
   const [bluetoothState, setBluetoothState] = useState<string>('Unknown');
   const [isEmulator, setIsEmulator] = useState(false);
+
+  const scanTimeoutRef = useRef<NodeJS.Timeout | null>(null);
+  const isScanningRef = useRef(false);
 
   const isFriend = useAppStore(state => state.isFriend);
   const addFriend = useAppStore(state => state.addFriend);
@@ -107,6 +110,11 @@ export default function BLETestScreen() {
       return;
     }
 
+    if (isScanningRef.current) {
+      console.log('⚠️ Scan already in progress');
+      return;
+    }
+
     const state = await bleManager.state();
     if (state !== 'PoweredOn') {
       Alert.alert('Bluetooth Required', 'Please turn on Bluetooth and try again.');
@@ -119,80 +127,104 @@ export default function BLETestScreen() {
     setDevices([]);
     setError('');
     setScanning(true);
+    isScanningRef.current = true;
 
     console.log('🔵 Starting filtered scan for Kela-Konnect devices...');
     console.log(`🔍 Looking for UUID: ${KELA_SERVICE_UUID}`);
 
-    bleManager.startDeviceScan(
-      [KELA_SERVICE_UUID],
-      null,
-      (error, device) => {
-        if (error) {
-          console.error('❌ Scan error:', error);
-          setError(`Scan error: ${error.message}`);
-          setScanning(false);
-          return;
-        }
-
-        if (device) {
-          console.log(`📡 Found Kela-Konnect device: ${device.name || 'Unnamed'} (${device.id})`);
-          
-          const isDeviceFriend = isFriend(device.id);
-          
-          if (isDeviceFriend) {
-            console.log(`👥 Found FRIEND: ${device.name}`);
+    try {
+      bleManager.startDeviceScan(
+        [KELA_SERVICE_UUID],
+        null,
+        (error, device) => {
+          if (error) {
+            console.error('❌ Scan error:', error);
+            setError(`Scan error: ${error.message}`);
+            stopScan();
+            return;
           }
 
-          setDevices((prevDevices) => {
-            const existingIndex = prevDevices.findIndex((d) => d.id === device.id);
+          if (device) {
+            console.log(`📡 Found Kela-Konnect device: ${device.name || 'Unnamed'} (${device.id})`);
             
-            const newDevice: KelaDevice = {
-              id: device.id,  // BLE MAC address
-              name: device.name || 'Unknown User',
-              rssi: device.rssi || -100,
-              lastSeen: new Date(),
-              isFriend: isDeviceFriend,
-            };
-
-            if (existingIndex >= 0) {
-              const updated = [...prevDevices];
-              updated[existingIndex] = newDevice;
-              return updated;
-            } else {
-              return [...prevDevices, newDevice];
+            const isDeviceFriend = isFriend(device.id);
+            
+            if (isDeviceFriend) {
+              console.log(`👥 Found FRIEND: ${device.name}`);
             }
-          });
-        }
-      }
-    );
 
-    setTimeout(() => {
-      console.log('⏹️ Stopping scan...');
-      bleManager.stopDeviceScan();
+            setDevices((prevDevices) => {
+              const existingIndex = prevDevices.findIndex((d) => d.id === device.id);
+              
+              const newDevice: KelaDevice = {
+                id: device.id,
+                name: device.name || 'Unknown User',
+                rssi: device.rssi || -100,
+                lastSeen: new Date(),
+                isFriend: isDeviceFriend,
+              };
+
+              if (existingIndex >= 0) {
+                const updated = [...prevDevices];
+                updated[existingIndex] = newDevice;
+                return updated;
+              } else {
+                return [...prevDevices, newDevice];
+              }
+            });
+          }
+        }
+      );
+
+      // Auto-stop after 15 seconds
+      scanTimeoutRef.current = setTimeout(() => {
+        console.log('⏹️ Auto-stopping scan after 15s...');
+        stopScan();
+      }, 15000);
+
+    } catch (err) {
+      console.error('❌ Start scan error:', err);
+      setError(`Start scan failed: ${err}`);
       setScanning(false);
-    }, 15000);
+      isScanningRef.current = false;
+    }
   };
 
   const stopScan = () => {
-    if (bleManager) {
-      bleManager.stopDeviceScan();
-      setScanning(false);
-      console.log('⏹️ Scan stopped manually');
+    if (!isScanningRef.current) {
+      console.log('ℹ️ Scan not running');
+      return;
     }
+
+    if (scanTimeoutRef.current) {
+      clearTimeout(scanTimeoutRef.current);
+      scanTimeoutRef.current = null;
+    }
+
+    if (bleManager) {
+      try {
+        bleManager.stopDeviceScan();
+        console.log('⏹️ Scan stopped successfully');
+      } catch (err) {
+        console.log('ℹ️ Scan already stopped:', err);
+      }
+    }
+
+    setScanning(false);
+    isScanningRef.current = false;
   };
 
   const handleAddFriend = async (device: KelaDevice) => {
     try {
       await addFriend({
-        id: device.name,  // Custom display ID
-        bleAddress: device.id,  // Real BLE MAC address
+        id: device.name,
+        bleAddress: device.id,
         name: device.name,
         addedDate: new Date(),
       });
 
       Alert.alert('✅ Friend Added!', `${device.name} has been added to your friends`);
       
-      // Update local state
       setDevices(prevDevices => 
         prevDevices.map(d => 
           d.id === device.id ? { ...d, isFriend: true } : d
@@ -205,10 +237,13 @@ export default function BLETestScreen() {
   };
 
   const handleCall = (device: KelaDevice) => {
+    // Stop scan before initiating call
+    stopScan();
+    
     router.push({
       pathname: '/call',
       params: {
-        friendId: device.id,  // Pass BLE MAC address
+        friendId: device.id,
         friendName: device.name
       }
     });
@@ -216,12 +251,23 @@ export default function BLETestScreen() {
 
   useEffect(() => {
     return () => {
+      if (scanTimeoutRef.current) {
+        clearTimeout(scanTimeoutRef.current);
+      }
+      if (bleManager && isScanningRef.current) {
+        try {
+          bleManager.stopDeviceScan();
+        } catch (e) {
+          // Ignore
+        }
+      }
       if (bleManager) {
         bleManager.destroy();
       }
     };
   }, [bleManager]);
 
+  // Rest of the component stays the same...
   if (isEmulator) {
     return (
       <View style={styles.container}>
@@ -343,172 +389,36 @@ function getDistance(rssi: number): string {
   return 'Far (15m+)';
 }
 
+// Styles stay the same...
 const styles = StyleSheet.create({
-  container: {
-    flex: 1,
-    padding: 20,
-    backgroundColor: '#f5f5f5',
-  },
-  title: {
-    fontSize: 28,
-    fontWeight: 'bold',
-    marginBottom: 20,
-    marginTop: 40,
-    textAlign: 'center',
-    color: '#333',
-  },
-  emulatorWarning: {
-    backgroundColor: '#FFF3E0',
-    padding: 20,
-    borderRadius: 12,
-    borderLeftWidth: 4,
-    borderLeftColor: '#FF9800',
-    marginTop: 20,
-  },
-  emulatorTitle: {
-    fontSize: 20,
-    fontWeight: 'bold',
-    color: '#E65100',
-    marginBottom: 12,
-  },
-  emulatorText: {
-    fontSize: 16,
-    color: '#666',
-    lineHeight: 22,
-  },
-  statusContainer: {
-    flexDirection: 'row',
-    justifyContent: 'center',
-    alignItems: 'center',
-    marginBottom: 20,
-    padding: 10,
-    backgroundColor: '#fff',
-    borderRadius: 8,
-  },
-  statusLabel: {
-    fontSize: 16,
-    marginRight: 10,
-    color: '#666',
-  },
-  statusValue: {
-    fontSize: 16,
-    fontWeight: 'bold',
-  },
-  subtitle: {
-    fontSize: 18,
-    fontWeight: '600',
-    marginTop: 20,
-    marginBottom: 10,
-    color: '#333',
-  },
-  buttonContainer: {
-    flexDirection: 'row',
-    justifyContent: 'space-around',
-    marginBottom: 20,
-  },
-  error: {
-    color: '#F44336',
-    marginBottom: 15,
-    padding: 10,
-    backgroundColor: '#FFEBEE',
-    borderRadius: 8,
-    fontSize: 14,
-  },
-  list: {
-    flex: 1,
-  },
-  deviceItem: {
-    flexDirection: 'row',
-    justifyContent: 'space-between',
-    alignItems: 'center',
-    padding: 15,
-    marginBottom: 10,
-    backgroundColor: '#fff',
-    borderRadius: 12,
-    borderLeftWidth: 4,
-    elevation: 2,
-    shadowColor: '#000',
-    shadowOffset: { width: 0, height: 2 },
-    shadowOpacity: 0.1,
-    shadowRadius: 4,
-  },
-  deviceInfo: {
-    flex: 1,
-  },
-  deviceHeader: {
-    flexDirection: 'row',
-    justifyContent: 'space-between',
-    alignItems: 'center',
-    marginBottom: 8,
-  },
-  deviceName: {
-    fontSize: 18,
-    fontWeight: 'bold',
-    color: '#333',
-  },
-  deviceRssi: {
-    fontSize: 16,
-  },
-  deviceId: {
-    fontSize: 11,
-    color: '#999',
-    marginBottom: 4,
-    fontFamily: 'monospace',
-  },
-  deviceSignal: {
-    fontSize: 12,
-    color: '#666',
-  },
-  deviceActions: {
-    marginLeft: 10,
-  },
-  addButton: {
-    width: 50,
-    height: 50,
-    borderRadius: 25,
-    backgroundColor: '#4CAF50',
-    justifyContent: 'center',
-    alignItems: 'center',
-    elevation: 2,
-  },
-  addButtonText: {
-    fontSize: 24,
-  },
-  callButton: {
-    width: 50,
-    height: 50,
-    borderRadius: 25,
-    backgroundColor: '#2196F3',
-    justifyContent: 'center',
-    alignItems: 'center',
-    elevation: 2,
-  },
-  callButtonText: {
-    fontSize: 24,
-  },
-  emptyContainer: {
-    alignItems: 'center',
-    marginTop: 60,
-  },
-  emptyIcon: {
-    fontSize: 64,
-    marginBottom: 20,
-  },
-  emptyText: {
-    textAlign: 'center',
-    color: '#999',
-    fontSize: 16,
-    lineHeight: 24,
-  },
-  infoBox: {
-    backgroundColor: '#E3F2FD',
-    padding: 12,
-    borderRadius: 8,
-    marginTop: 10,
-  },
-  infoText: {
-    fontSize: 14,
-    color: '#666',
-    textAlign: 'center',
-  },
+  // ... (keep all existing styles)
+  container: { flex: 1, padding: 20, backgroundColor: '#f5f5f5' },
+  title: { fontSize: 28, fontWeight: 'bold', marginBottom: 20, marginTop: 40, textAlign: 'center', color: '#333' },
+  emulatorWarning: { backgroundColor: '#FFF3E0', padding: 20, borderRadius: 12, borderLeftWidth: 4, borderLeftColor: '#FF9800', marginTop: 20 },
+  emulatorTitle: { fontSize: 20, fontWeight: 'bold', color: '#E65100', marginBottom: 12 },
+  emulatorText: { fontSize: 16, color: '#666', lineHeight: 22 },
+  statusContainer: { flexDirection: 'row', justifyContent: 'center', alignItems: 'center', marginBottom: 20, padding: 10, backgroundColor: '#fff', borderRadius: 8 },
+  statusLabel: { fontSize: 16, marginRight: 10, color: '#666' },
+  statusValue: { fontSize: 16, fontWeight: 'bold' },
+  subtitle: { fontSize: 18, fontWeight: '600', marginTop: 20, marginBottom: 10, color: '#333' },
+  buttonContainer: { flexDirection: 'row', justifyContent: 'space-around', marginBottom: 20 },
+  error: { color: '#F44336', marginBottom: 15, padding: 10, backgroundColor: '#FFEBEE', borderRadius: 8, fontSize: 14 },
+  list: { flex: 1 },
+  deviceItem: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', padding: 15, marginBottom: 10, backgroundColor: '#fff', borderRadius: 12, borderLeftWidth: 4, elevation: 2, shadowColor: '#000', shadowOffset: { width: 0, height: 2 }, shadowOpacity: 0.1, shadowRadius: 4 },
+  deviceInfo: { flex: 1 },
+  deviceHeader: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', marginBottom: 8 },
+  deviceName: { fontSize: 18, fontWeight: 'bold', color: '#333' },
+  deviceRssi: { fontSize: 16 },
+  deviceId: { fontSize: 11, color: '#999', marginBottom: 4, fontFamily: 'monospace' },
+  deviceSignal: { fontSize: 12, color: '#666' },
+  deviceActions: { marginLeft: 10 },
+  addButton: { width: 50, height: 50, borderRadius: 25, backgroundColor: '#4CAF50', justifyContent: 'center', alignItems: 'center', elevation: 2 },
+  addButtonText: { fontSize: 24 },
+  callButton: { width: 50, height: 50, borderRadius: 25, backgroundColor: '#2196F3', justifyContent: 'center', alignItems: 'center', elevation: 2 },
+  callButtonText: { fontSize: 24 },
+  emptyContainer: { alignItems: 'center', marginTop: 60 },
+  emptyIcon: { fontSize: 64, marginBottom: 20 },
+  emptyText: { textAlign: 'center', color: '#999', fontSize: 16, lineHeight: 24 },
+  infoBox: { backgroundColor: '#E3F2FD', padding: 12, borderRadius: 8, marginTop: 10 },
+  infoText: { fontSize: 14, color: '#666', textAlign: 'center' },
 });

@@ -18,7 +18,7 @@ export default function RootLayout() {
   }, [myDeviceId]);
 
   useEffect(() => {
-    // ✅ Global listener for incoming calls
+    // Global listener for incoming calls
     const handleCallRequest = (data: any) => {
       console.log('📲 Incoming call from:', data.from);
       console.log('📲 Caller name:', data.data?.callerName);
@@ -33,7 +33,7 @@ export default function RootLayout() {
       });
     };
 
-    // ✅ Listen for incoming offer (actual WebRTC offer)
+    // Listen for incoming offer (actual WebRTC offer)
     const handleOffer = (data: any) => {
       console.log('📲 Incoming offer from:', data.from);
 
@@ -58,7 +58,7 @@ export default function RootLayout() {
 
   return (
     <Stack>
-      <Stack.Screen name="index" options={{ headerShown: false }} />
+      <Stack.Screen name="(tabs)" options={{ headerShown: false }} />
       <Stack.Screen name="ble-test" options={{ title: 'Scan for Users' }} />
       <Stack.Screen name="ble-advertise" options={{ title: 'Broadcast Presence' }} />
       <Stack.Screen name="friends" options={{ title: 'Friends' }} />
@@ -66,6 +66,7 @@ export default function RootLayout() {
       <Stack.Screen name="incoming-call" options={{ headerShown: false }} />
       <Stack.Screen name="qr-code" options={{ title: 'My QR Code' }} />
       <Stack.Screen name="qr-scanner" options={{ title: 'Scan QR Code' }} />
+      <Stack.Screen name="modal" options={{ presentation: 'modal' }} />
     </Stack>
   );
 }

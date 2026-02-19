@@ -3,12 +3,24 @@ import BleClient from '../modules/BleClient';
 import BlePeripheral from '../modules/BlePeripheral';
 
 const KELA_SERVICE_UUID = '0000FE00-0000-1000-8000-00805F9B34FB';
+const MAX_CHUNK_SIZE = 350; // ✅ Reduced to 350 bytes (safer)
 
 export interface SignalingMessage {
-  type: 'offer' | 'answer' | 'ice-candidate' | 'call-request' | 'call-accept' | 'call-reject' | 'call-end';
+  type: 'offer' | 'answer' | 'ice-candidate' | 'call-request' | 'call-accept' | 'call-reject' | 'call-end' | 'chunk';
   from: string;
   to: string;
   data?: any;
+  chunkId?: string;
+  chunkIndex?: number;
+  totalChunks?: number;
+  originalType?: string;
+}
+
+interface ChunkBuffer {
+  chunks: Map<number, string>;
+  totalChunks: number;
+  originalType: string;
+  timestamp: number;
 }
 
 class CallSignalingManager {
@@ -17,10 +29,12 @@ class CallSignalingManager {
   private myDeviceId: string | null = null;
   private connectedDevices: Set<string> = new Set();
   private connectionInProgress: Set<string> = new Set();
+  private chunkBuffers: Map<string, ChunkBuffer> = new Map();
 
   constructor() {
     this.bleManager = new BleManager();
     this.setupListeners();
+    this.startChunkCleanup();
   }
 
   private setupListeners() {
@@ -60,15 +74,80 @@ class CallSignalingManager {
   private handleIncomingSignal(from: string, data: string) {
     try {
       const message: SignalingMessage = JSON.parse(data);
+      
+      if (message.type === 'chunk') {
+        this.handleChunk(from, message);
+        return;
+      }
+
       console.log(`📨 Parsed signal: ${message.type} from ${from}`);
       this.emit(message.type, {
         from: from,
         to: message.to,
         data: message.data
       });
+
     } catch (error) {
       console.error('❌ Error parsing signal:', error);
     }
+  }
+
+  private handleChunk(from: string, message: SignalingMessage) {
+    const { chunkId, chunkIndex, totalChunks, data, originalType } = message;
+    
+    if (!chunkId || chunkIndex === undefined || !totalChunks || !originalType) {
+      console.error('❌ Invalid chunk message');
+      return;
+    }
+
+    if (!this.chunkBuffers.has(chunkId)) {
+      this.chunkBuffers.set(chunkId, {
+        chunks: new Map(),
+        totalChunks,
+        originalType,
+        timestamp: Date.now()
+      });
+    }
+
+    const buffer = this.chunkBuffers.get(chunkId)!;
+    buffer.chunks.set(chunkIndex, data);
+
+    console.log(`📦 Received chunk ${chunkIndex + 1}/${totalChunks} for ${originalType}`);
+
+    if (buffer.chunks.size === totalChunks) {
+      console.log('✅ All chunks received, reassembling...');
+      
+      let fullData = '';
+      for (let i = 0; i < totalChunks; i++) {
+        fullData += buffer.chunks.get(i) || '';
+      }
+
+      try {
+        const completeMessage = JSON.parse(fullData);
+        console.log(`📨 Reassembled ${originalType} from ${from}`);
+        this.emit(originalType, {
+          from: from,
+          to: completeMessage.to,
+          data: completeMessage.data
+        });
+      } catch (error) {
+        console.error('❌ Error parsing reassembled message:', error);
+      }
+
+      this.chunkBuffers.delete(chunkId);
+    }
+  }
+
+  private startChunkCleanup() {
+    setInterval(() => {
+      const now = Date.now();
+      for (const [chunkId, buffer] of this.chunkBuffers.entries()) {
+        if (now - buffer.timestamp > 30000) {
+          console.log('🧹 Cleaning up expired chunk buffer:', chunkId);
+          this.chunkBuffers.delete(chunkId);
+        }
+      }
+    }, 30000);
   }
 
   on(event: string, callback: Function) {
@@ -98,7 +177,6 @@ class CallSignalingManager {
     console.log('📱 My device ID set to:', deviceId);
   }
 
-  // ✅ FIX: Stop scan FIRST, then connect
   async ensureConnected(deviceAddress: string): Promise<boolean> {
     try {
       const bleAddressPattern = /^[0-9A-F]{2}:[0-9A-F]{2}:[0-9A-F]{2}:[0-9A-F]{2}:[0-9A-F]{2}:[0-9A-F]{2}$/i;
@@ -112,29 +190,36 @@ class CallSignalingManager {
         return true;
       }
 
-      // Prevent duplicate connection attempts
       if (this.connectionInProgress.has(deviceAddress)) {
         console.log('⏳ Connection already in progress for', deviceAddress);
-        // Wait for it to complete
         await new Promise(resolve => setTimeout(resolve, 3000));
         return this.connectedDevices.has(deviceAddress);
       }
 
       this.connectionInProgress.add(deviceAddress);
 
-      // ✅ CRITICAL FIX: Stop BLE scan before connecting
       console.log('⏹️ Stopping scan before GATT connect...');
       try {
-        this.bleManager.stopDeviceScan();
-        await new Promise(resolve => setTimeout(resolve, 500));
-      } catch (e) {
-        console.log('Scan was not running:', e);
+        const state = await this.bleManager.state();
+        if (state === 'PoweredOn') {
+          this.bleManager.stopDeviceScan();
+          await new Promise(resolve => setTimeout(resolve, 800));
+          console.log('✅ Scan stopped successfully');
+        }
+      } catch (scanError) {
+        console.log('ℹ️ Scan stop not needed:', scanError);
       }
 
       console.log('🔌 Connecting to GATT:', deviceAddress);
-      await BleClient.connectToDevice(deviceAddress);
+      
+      try {
+        await BleClient.connectToDevice(deviceAddress);
+      } catch (connectError) {
+        console.error('❌ Connection initiation failed:', connectError);
+        this.connectionInProgress.delete(deviceAddress);
+        return false;
+      }
 
-      // Wait for connection with timeout
       const connected = await this.waitForConnection(deviceAddress, 5000);
 
       if (connected) {
@@ -143,17 +228,19 @@ class CallSignalingManager {
       } else {
         console.log('❌ GATT connection timeout');
         this.connectionInProgress.delete(deviceAddress);
+        try {
+          await BleClient.disconnectFromDevice(deviceAddress);
+        } catch (e) {}
         return false;
       }
 
     } catch (error) {
-      console.error('❌ Error connecting:', error);
+      console.error('❌ Error in ensureConnected:', error);
       this.connectionInProgress.delete(deviceAddress);
       return false;
     }
   }
 
-  // Wait for connection with timeout
   private waitForConnection(deviceAddress: string, timeoutMs: number): Promise<boolean> {
     return new Promise((resolve) => {
       const checkInterval = setInterval(() => {
@@ -171,7 +258,6 @@ class CallSignalingManager {
     });
   }
 
-  // ✅ FIX: Send with retry logic
   async sendSignal(deviceAddress: string, message: SignalingMessage): Promise<boolean> {
     try {
       console.log('📤 Sending signal:', message.type, 'to', deviceAddress);
@@ -185,19 +271,23 @@ class CallSignalingManager {
       const signalData = JSON.stringify(message);
       console.log('📦 Signal data size:', signalData.length, 'bytes');
 
-      // ✅ FIX: Try server first (more reliable), then client
+      if (signalData.length > MAX_CHUNK_SIZE) {
+        console.log('📦 Data too large, chunking into smaller pieces...');
+        return await this.sendChunked(deviceAddress, message, signalData);
+      }
+
       try {
         await BlePeripheral.sendSignalToDevice(deviceAddress, signalData);
         console.log('✅ Signal sent via BLE Server');
         return true;
       } catch (serverError) {
-        console.log('⚠️ Server send failed, trying client...');
+        console.log('⚠️ Server send failed:', serverError);
         try {
           await BleClient.sendSignalToDevice(deviceAddress, signalData);
           console.log('✅ Signal sent via BLE Client');
           return true;
         } catch (clientError) {
-          console.error('❌ Both send methods failed');
+          console.error('❌ Both send methods failed:', clientError);
           return false;
         }
       }
@@ -206,6 +296,69 @@ class CallSignalingManager {
       console.error('❌ Failed to send signal:', error);
       return false;
     }
+  }
+
+  // ✅ UPDATED: Better error handling and logging
+  private async sendChunked(deviceAddress: string, message: SignalingMessage, fullData: string): Promise<boolean> {
+    const chunkId = `${Date.now()}-${Math.random().toString(36).substring(7)}`;
+    const chunks: string[] = [];
+    
+    for (let i = 0; i < fullData.length; i += MAX_CHUNK_SIZE) {
+      chunks.push(fullData.substring(i, i + MAX_CHUNK_SIZE));
+    }
+
+    console.log(`📦 Sending ${chunks.length} chunks for ${message.type}`);
+
+    for (let i = 0; i < chunks.length; i++) {
+      const chunkMessage: SignalingMessage = {
+        type: 'chunk',
+        from: this.myDeviceId || 'unknown',
+        to: deviceAddress,
+        chunkId,
+        chunkIndex: i,
+        totalChunks: chunks.length,
+        originalType: message.type,
+        data: chunks[i]
+      };
+
+      const chunkData = JSON.stringify(chunkMessage);
+      console.log(`📦 Chunk ${i + 1}/${chunks.length} size: ${chunkData.length} bytes`);
+      
+      // ✅ CRITICAL: Verify chunk isn't too large
+      if (chunkData.length > 500) {
+        console.error(`❌ Chunk ${i + 1} is too large: ${chunkData.length} bytes`);
+        return false;
+      }
+
+      let sent = false;
+      
+      try {
+        await BlePeripheral.sendSignalToDevice(deviceAddress, chunkData);
+        console.log(`✅ Chunk ${i + 1}/${chunks.length} sent via server`);
+        sent = true;
+      } catch (serverError: any) {
+        console.log(`⚠️ Server failed for chunk ${i + 1}:`, serverError?.message || serverError);
+        
+        try {
+          await BleClient.sendSignalToDevice(deviceAddress, chunkData);
+          console.log(`✅ Chunk ${i + 1}/${chunks.length} sent via client`);
+          sent = true;
+        } catch (clientError: any) {
+          console.error(`❌ Both methods failed for chunk ${i + 1}:`, clientError?.message || clientError);
+        }
+      }
+
+      if (!sent) {
+        console.error(`❌ Failed to send chunk ${i + 1}/${chunks.length}`);
+        return false;
+      }
+
+      // ✅ Longer delay between chunks
+      await new Promise(resolve => setTimeout(resolve, 100));
+    }
+
+    console.log('✅ All chunks sent successfully');
+    return true;
   }
 
   async sendCallRequest(deviceId: string, fromName: string): Promise<boolean> {
