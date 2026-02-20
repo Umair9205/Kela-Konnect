@@ -18,32 +18,36 @@ export default function QRScannerScreen() {
 
 const handleBarCodeScanned = async ({ data }: { data: string }) => {
   if (scanned) return;
-  
   setScanned(true);
 
   try {
     const parsed = JSON.parse(data);
 
-    // Validate QR code is from Kela-Konnect
     if (parsed.app !== 'kela-konnect') {
       Alert.alert('Invalid QR Code', 'This is not a Kela-Konnect QR code');
       setScanned(false);
       return;
     }
 
-    // Check if already friends
     if (isFriend(parsed.id)) {
       Alert.alert('Already Friends', `${parsed.name} is already in your friends list`);
       setScanned(false);
       return;
     }
 
-    // ⚠️ PROBLEM: QR code doesn't have BLE address!
-    // We need to get it from scanning first
+    // ✅ FIX: Add friend using their custom ID as both id and bleAddress
+    // The real BLE MAC will be matched when they are scanned nearby
+    await addFriend({
+      id: parsed.id,
+      bleAddress: parsed.id,  // Will be updated when discovered via BLE scan
+      name: parsed.name,
+      addedDate: new Date(),
+    });
+
     Alert.alert(
-      'Scan Required',
-      'Please scan for nearby devices first to find their BLE address, then add them as friend',
-      [{ text: 'OK', onPress: () => setScanned(false) }]
+      '✅ Friend Added!',
+      `${parsed.name} added!\n\nNow scan for nearby users to find their BLE address for calling.`,
+      [{ text: 'OK' }]
     );
 
   } catch (error) {

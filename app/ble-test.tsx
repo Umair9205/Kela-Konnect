@@ -28,6 +28,7 @@ export default function BLETestScreen() {
 
   const isFriend = useAppStore(state => state.isFriend);
   const addFriend = useAppStore(state => state.addFriend);
+  const friends = useAppStore(state => state.friends);
 
   useEffect(() => {
     const checkDevice = async () => {
@@ -136,7 +137,7 @@ export default function BLETestScreen() {
       bleManager.startDeviceScan(
         [KELA_SERVICE_UUID],
         null,
-        (error, device) => {
+        async (error, device) => {
           if (error) {
             console.error('❌ Scan error:', error);
             setError(`Scan error: ${error.message}`);
@@ -147,7 +148,18 @@ export default function BLETestScreen() {
           if (device) {
             console.log(`📡 Found Kela-Konnect device: ${device.name || 'Unnamed'} (${device.id})`);
             
-            const isDeviceFriend = isFriend(device.id);
+            // ✅ FIX BUG 3: Check if this device name matches a QR-added friend (whose bleAddress = custom ID)
+            // If so, update their bleAddress to the real MAC address
+            const friendByName = friends.find(f => f.name === device.name && f.bleAddress !== device.id);
+            if (friendByName) {
+              console.log(`🔄 Updating BLE address for QR-added friend: ${device.name} → ${device.id}`);
+              await addFriend({
+                ...friendByName,
+                bleAddress: device.id,  // Update to real MAC
+              });
+            }
+
+            const isDeviceFriend = isFriend(device.id) || !!friendByName;
             
             if (isDeviceFriend) {
               console.log(`👥 Found FRIEND: ${device.name}`);

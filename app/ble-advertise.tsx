@@ -109,12 +109,12 @@ export default function BLEAdvertiseScreen() {
 
       await BlePeripheral.startAdvertising(deviceName, KELA_SERVICE_UUID);
 
-      // Get the actual Bluetooth MAC address
-      const deviceId = await bleManager.state(); // This is a placeholder
-      // In production, you'd get the actual MAC from native module
-      
+      // ✅ Use existing stored ID or generate a new stable one (only once)
+      const existingId = useAppStore.getState().myDeviceId;
+      const stableId = existingId || 'BLE-' + Math.random().toString(36).substring(2, 10);
+
       // Save to store
-      await setMyDeviceInfo('BLE-' + Date.now().toString(36), deviceName);
+      await setMyDeviceInfo(stableId, deviceName);
 
       Alert.alert(
         '✅ Broadcasting Started!',

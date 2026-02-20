@@ -2,11 +2,11 @@ import { router, useLocalSearchParams } from 'expo-router';
 import React, { useEffect, useState } from 'react';
 import { StyleSheet, Text, TouchableOpacity, Vibration, View } from 'react-native';
 import {
-    mediaDevices,
-    MediaStream,
-    MediaStreamTrack,
-    RTCPeerConnection,
-    RTCSessionDescription,
+  mediaDevices,
+  MediaStream,
+  MediaStreamTrack,
+  RTCPeerConnection,
+  RTCSessionDescription,
 } from 'react-native-webrtc';
 import { signalingManager } from '../services/CallSignaling';
 
@@ -87,6 +87,28 @@ export default function IncomingCallScreen() {
       };
 
       // Set remote description (the offer)
+      // ✅ Guard: only parse if offerSdp is a real SDP string
+      if (!offerSdp || offerSdp === '' || offerSdp === 'null' || offerSdp === 'undefined') {
+        console.log('⚠️ No offer SDP received - waiting for offer via BLE signaling');
+        
+        // Listen for the offer to arrive via BLE instead
+        signalingManager.on('offer', async (data: any) => {
+          if (data.from === callerId) {
+            try {
+              const receivedOffer = data.data?.sdp;
+              await peerConnection.current?.setRemoteDescription(new RTCSessionDescription(receivedOffer));
+              const answer = await peerConnection.current!.createAnswer();
+              await peerConnection.current!.setLocalDescription(answer);
+              await signalingManager.sendAnswer(callerId, answer);
+              setCallState('active');
+            } catch (err) {
+              console.error('❌ Error handling late offer:', err);
+            }
+          }
+        });
+        return;
+      }
+
       const offer = JSON.parse(offerSdp);
       await peerConnection.current.setRemoteDescription(
         new RTCSessionDescription(offer)
