@@ -2,6 +2,7 @@
   "expo": {
     "name": "kela-konnect",
     "slug": "kela-konnect",
+    "scheme": "kela-konnect",
     "icon": "./assets/images/icon.png",
     "splash": {
       "image": "./assets/images/splash-icon.png",

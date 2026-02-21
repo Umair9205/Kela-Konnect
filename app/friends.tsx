@@ -6,14 +6,15 @@ import { useAppStore } from '../store/appStore';
 export default function FriendsScreen() {
   const friends = useAppStore(state => state.friends);
   const removeFriend = useAppStore(state => state.removeFriend);
-  const loadFriends = useAppStore(state => state.loadFriends);
+  const loadData = useAppStore(state => state.loadData);       // ✅ was loadFriends
+  const getCurrentMac = useAppStore(state => state.getCurrentMac);
 
   useEffect(() => {
-    loadFriends();
+    loadData();                                                 // ✅ was loadFriends()
   }, []);
 
-  const handleRemove = async (bleAddress: string) => {
-    const friend = friends.find(f => f.bleAddress === bleAddress);
+  const handleRemove = async (uuid: string) => {              // ✅ was bleAddress
+    const friend = friends.find(f => f.uuid === uuid);
     if (!friend) return;
 
     Alert.alert(
@@ -24,17 +25,38 @@ export default function FriendsScreen() {
         {
           text: 'Remove',
           style: 'destructive',
-          onPress: () => removeFriend(bleAddress)
+          onPress: () => removeFriend(uuid)                    // ✅ uses uuid
         }
       ]
     );
+  };
+
+  const handleCall = (item: any) => {
+    // ✅ Use latest known MAC (handles Android MAC rotation)
+    const latestMac = getCurrentMac(item.uuid) || item.currentMac;
+    if (!latestMac) {
+      Alert.alert(
+        '⚠️ Device Not Seen Recently',
+        `Cannot call ${item.name} — scan for nearby users first to find their current BLE address.`
+      );
+      return;
+    }
+    console.log(`📞 Calling ${item.name} | UUID: ${item.uuid} | MAC: ${latestMac}`);
+    router.push({
+      pathname: '/call',
+      params: {
+        friendId: latestMac,
+        friendName: item.name,
+        friendUUID: item.uuid,
+      }
+    });
   };
 
   return (
     <View style={styles.container}>
       <Text style={styles.title}>👥 Friends</Text>
 
-      <TouchableOpacity 
+      <TouchableOpacity
         style={styles.scanButton}
         onPress={() => router.push('/ble-test')}
       >
@@ -47,34 +69,33 @@ export default function FriendsScreen() {
 
       <FlatList
         data={friends}
-        keyExtractor={(item) => item.bleAddress}
+        keyExtractor={(item) => item.uuid}                     // ✅ was item.bleAddress
         renderItem={({ item }) => (
           <View style={styles.friendItem}>
             <View style={styles.friendInfo}>
               <Text style={styles.friendName}>👤 {item.name}</Text>
-              <Text style={styles.friendId}>BLE: {item.bleAddress}</Text>
+              {/* Show current MAC if known, else show UUID */}
+              <Text style={styles.friendId}>
+                {item.currentMac
+                  ? `MAC: ${item.currentMac}`
+                  : `UUID: ${item.uuid.substring(0, 8)}...`}
+              </Text>
               <Text style={styles.friendDate}>
                 Added: {new Date(item.addedDate).toLocaleDateString()}
               </Text>
             </View>
-            
+
             <View style={styles.friendActions}>
               <TouchableOpacity
                 style={styles.callButton}
-                onPress={() => router.push({
-                  pathname: '/call',
-                  params: { 
-                    friendId: item.bleAddress,  // Pass BLE MAC address
-                    friendName: item.name 
-                  }
-                })}
+                onPress={() => handleCall(item)}
               >
                 <Text style={styles.callButtonText}>📞</Text>
               </TouchableOpacity>
-              
+
               <TouchableOpacity
                 style={styles.removeButton}
-                onPress={() => handleRemove(item.bleAddress)}
+                onPress={() => handleRemove(item.uuid)}        // ✅ was item.bleAddress
               >
                 <Text style={styles.removeButtonText}>🗑️</Text>
               </TouchableOpacity>

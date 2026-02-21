@@ -8,14 +8,7 @@ const LINKING_ERROR =
 
 const BleClientModule = NativeModules.BleClientModule
   ? NativeModules.BleClientModule
-  : new Proxy(
-      {},
-      {
-        get() {
-          throw new Error(LINKING_ERROR);
-        },
-      }
-    );
+  : new Proxy({}, { get() { throw new Error(LINKING_ERROR); } });
 
 const eventEmitter = new NativeEventEmitter(BleClientModule);
 
@@ -25,6 +18,8 @@ export interface BleClientInterface {
   disconnectFromDevice(deviceAddress: string): Promise<boolean>;
   disconnectAll(): Promise<boolean>;
   getConnectedDevices(): Promise<string[]>;
+  // ✅ NEW: read permanent UUID from connected device's identity characteristic
+  readDeviceIdentity(deviceAddress: string): Promise<string>; // returns JSON: {"uuid":"...","name":"..."}
   addListener(
     eventType: 'onGattConnected' | 'onGattDisconnected' | 'onSignalReceived' | 'onServicesDiscovered',
     listener: (event: any) => void
@@ -33,29 +28,27 @@ export interface BleClientInterface {
 }
 
 const BleClient: BleClientInterface = {
-  connectToDevice: (deviceAddress: string) => {
-    return BleClientModule.connectToDevice(deviceAddress);
-  },
+  connectToDevice: (deviceAddress) =>
+    BleClientModule.connectToDevice(deviceAddress),
 
-  sendSignalToDevice: (deviceAddress: string, signalData: string) => {
-    return BleClientModule.sendSignalToDevice(deviceAddress, signalData);
-  },
+  sendSignalToDevice: (deviceAddress, signalData) =>
+    BleClientModule.sendSignalToDevice(deviceAddress, signalData),
 
-  disconnectFromDevice: (deviceAddress: string) => {
-    return BleClientModule.disconnectFromDevice(deviceAddress);
-  },
+  disconnectFromDevice: (deviceAddress) =>
+    BleClientModule.disconnectFromDevice(deviceAddress),
 
-  disconnectAll: () => {
-    return BleClientModule.disconnectAll();
-  },
+  disconnectAll: () =>
+    BleClientModule.disconnectAll(),
 
-  getConnectedDevices: () => {
-    return BleClientModule.getConnectedDevices();
-  },
+  getConnectedDevices: () =>
+    BleClientModule.getConnectedDevices(),
 
-  addListener: (eventType, listener) => {
-    return eventEmitter.addListener(eventType, listener);
-  },
+  // ✅ NEW
+  readDeviceIdentity: (deviceAddress) =>
+    BleClientModule.readDeviceIdentity(deviceAddress),
+
+  addListener: (eventType, listener) =>
+    eventEmitter.addListener(eventType, listener),
 
   removeAllListeners: () => {
     eventEmitter.removeAllListeners('onGattConnected');

@@ -8,14 +8,7 @@ const LINKING_ERROR =
 
 const BlePeripheralModule = NativeModules.BlePeripheralModule
   ? NativeModules.BlePeripheralModule
-  : new Proxy(
-      {},
-      {
-        get() {
-          throw new Error(LINKING_ERROR);
-        },
-      }
-    );
+  : new Proxy({}, { get() { throw new Error(LINKING_ERROR); } });
 
 const eventEmitter = new NativeEventEmitter(BlePeripheralModule);
 
@@ -24,6 +17,8 @@ export interface BlePeripheralInterface {
   stopAdvertising(): Promise<boolean>;
   isAdvertising(): Promise<boolean>;
   sendSignalToDevice(deviceAddress: string, signalData: string): Promise<boolean>;
+  // ✅ NEW: set permanent UUID into the identity characteristic
+  setDeviceUUID(uuid: string, name: string): void;
   addListener(
     eventType: 'onAdvertisingStarted' | 'onAdvertisingFailed' | 'onAdvertisingStopped' | 'onSignalReceived' | 'onDeviceConnected' | 'onDeviceDisconnected',
     listener: (event: any) => void
@@ -32,25 +27,24 @@ export interface BlePeripheralInterface {
 }
 
 const BlePeripheral: BlePeripheralInterface = {
-  startAdvertising: (deviceName: string, serviceUuid: string) => {
-    return BlePeripheralModule.startAdvertising(deviceName, serviceUuid);
-  },
+  startAdvertising: (deviceName, serviceUuid) =>
+    BlePeripheralModule.startAdvertising(deviceName, serviceUuid),
 
-  stopAdvertising: () => {
-    return BlePeripheralModule.stopAdvertising();
-  },
+  stopAdvertising: () =>
+    BlePeripheralModule.stopAdvertising(),
 
-  isAdvertising: () => {
-    return BlePeripheralModule.isAdvertising();
-  },
+  isAdvertising: () =>
+    BlePeripheralModule.isAdvertising(),
 
-  sendSignalToDevice: (deviceAddress: string, signalData: string) => {
-    return BlePeripheralModule.sendSignalToDevice(deviceAddress, signalData);
-  },
+  sendSignalToDevice: (deviceAddress, signalData) =>
+    BlePeripheralModule.sendSignalToDevice(deviceAddress, signalData),
 
-  addListener: (eventType, listener) => {
-    return eventEmitter.addListener(eventType, listener);
-  },
+  // ✅ NEW
+  setDeviceUUID: (uuid, name) =>
+    BlePeripheralModule.setDeviceUUID(uuid, name),
+
+  addListener: (eventType, listener) =>
+    eventEmitter.addListener(eventType, listener),
 
   removeAllListeners: () => {
     eventEmitter.removeAllListeners('onAdvertisingStarted');

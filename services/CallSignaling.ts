@@ -3,7 +3,13 @@ import BleClient from '../modules/BleClient';
 import BlePeripheral from '../modules/BlePeripheral';
 
 const KELA_SERVICE_UUID = '0000FE00-0000-1000-8000-00805F9B34FB';
-const MAX_CHUNK_SIZE = 350; // ✅ Reduced to 350 bytes (safer)
+
+// BLE MTU is ~512 bytes. Envelope overhead (type, from, to, chunkId, etc.) is ~180 bytes.
+// So max DATA per chunk = 512 - 180 = 332. Use 180 to be safe.
+const MAX_WIRE_SIZE = 512;       // hard BLE MTU limit
+const CHUNK_ENVELOPE_SIZE = 180; // overhead of chunk wrapper JSON
+const MAX_DATA_PER_CHUNK = 180;  // actual payload data per chunk (safe margin)
+const LARGE_SIGNAL_THRESHOLD = MAX_WIRE_SIZE - CHUNK_ENVELOPE_SIZE; // ~332 bytes
 
 export interface SignalingMessage {
   type: 'offer' | 'answer' | 'ice-candidate' | 'call-request' | 'call-accept' | 'call-reject' | 'call-end' | 'chunk';
@@ -271,8 +277,8 @@ class CallSignalingManager {
       const signalData = JSON.stringify(message);
       console.log('📦 Signal data size:', signalData.length, 'bytes');
 
-      if (signalData.length > MAX_CHUNK_SIZE) {
-        console.log('📦 Data too large, chunking into smaller pieces...');
+      if (signalData.length > LARGE_SIGNAL_THRESHOLD) {
+        console.log(`📦 Signal ${signalData.length}b > ${LARGE_SIGNAL_THRESHOLD}b threshold, chunking...`);
         return await this.sendChunked(deviceAddress, message, signalData);
       }
 
@@ -303,8 +309,8 @@ class CallSignalingManager {
     const chunkId = `${Date.now()}-${Math.random().toString(36).substring(7)}`;
     const chunks: string[] = [];
     
-    for (let i = 0; i < fullData.length; i += MAX_CHUNK_SIZE) {
-      chunks.push(fullData.substring(i, i + MAX_CHUNK_SIZE));
+    for (let i = 0; i < fullData.length; i += MAX_DATA_PER_CHUNK) {
+      chunks.push(fullData.substring(i, i + MAX_DATA_PER_CHUNK));
     }
 
     console.log(`📦 Sending ${chunks.length} chunks for ${message.type}`);
@@ -324,9 +330,9 @@ class CallSignalingManager {
       const chunkData = JSON.stringify(chunkMessage);
       console.log(`📦 Chunk ${i + 1}/${chunks.length} size: ${chunkData.length} bytes`);
       
-      // ✅ CRITICAL: Verify chunk isn't too large
-      if (chunkData.length > 500) {
-        console.error(`❌ Chunk ${i + 1} is too large: ${chunkData.length} bytes`);
+      // Guard: total wire size must be under MTU
+      if (chunkData.length > MAX_WIRE_SIZE) {
+        console.error(`❌ Chunk ${i + 1} wire size ${chunkData.length}b exceeds MTU ${MAX_WIRE_SIZE}b - reduce MAX_DATA_PER_CHUNK`);
         return false;
       }
 

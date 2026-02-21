@@ -4,24 +4,28 @@ import { signalingManager } from '../services/CallSignaling';
 import { useAppStore } from '../store/appStore';
 
 export default function RootLayout() {
-  const loadFriends = useAppStore(state => state.loadFriends);
-  const myDeviceId = useAppStore(state => state.myDeviceId);
+  const loadData = useAppStore(state => state.loadData);
+  const myUUID = useAppStore(state => state.myUUID);
 
   useEffect(() => {
-    loadFriends();
+    // Always load stored identity on app start
+    // This ensures UUID is set even if user never opened ble-advertise
+    loadData();
   }, []);
 
   useEffect(() => {
-    if (myDeviceId) {
-      signalingManager.setMyDeviceId(myDeviceId);
+    if (myUUID) {
+      signalingManager.setMyDeviceId(myUUID);
+      console.log('📱 SignalingManager identity set:', myUUID);
     }
-  }, [myDeviceId]);
+  }, [myUUID]);
 
   useEffect(() => {
     // Global listener for incoming calls
     const handleCallRequest = (data: any) => {
-      console.log('📲 Incoming call from:', data.from);
+      console.log('📲 Incoming call-request from:', data.from);
       console.log('📲 Caller name:', data.data?.callerName);
+      console.log('📲 Full data:', JSON.stringify(data));
 
       router.push({
         pathname: '/incoming-call',
@@ -35,7 +39,8 @@ export default function RootLayout() {
 
     // Listen for incoming offer (actual WebRTC offer)
     const handleOffer = (data: any) => {
-      console.log('📲 Incoming offer from:', data.from);
+      console.log('📲 Incoming OFFER from:', data.from);
+      console.log('📲 Offer data keys:', Object.keys(data.data || {}));
 
       router.push({
         pathname: '/incoming-call',

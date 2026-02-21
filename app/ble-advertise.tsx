@@ -15,8 +15,9 @@ export default function BLEAdvertiseScreen() {
 
   // Zustand store
   const setAdvertising = useAppStore(state => state.setAdvertising);
-  const setMyDeviceInfo = useAppStore(state => state.setMyDeviceInfo);
+  const initIdentity = useAppStore(state => state.initIdentity);
   const myStoredName = useAppStore(state => state.myDeviceName);
+  const myUUID = useAppStore(state => state.myUUID);
 
   // Load stored name on mount
   useEffect(() => {
@@ -107,14 +108,16 @@ export default function BLEAdvertiseScreen() {
       setError('');
       console.log(`📢 Starting to advertise as: ${deviceName}`);
 
+      // ✅ Init permanent UUID (generates once on first install, reuses forever)
+      await initIdentity(deviceName);
+      const uuid = useAppStore.getState().myUUID!;
+
+      // ✅ Write UUID into GATT identity characteristic so peers can read it
+      BlePeripheral.setDeviceUUID(uuid, deviceName);
+
       await BlePeripheral.startAdvertising(deviceName, KELA_SERVICE_UUID);
 
-      // ✅ Use existing stored ID or generate a new stable one (only once)
-      const existingId = useAppStore.getState().myDeviceId;
-      const stableId = existingId || 'BLE-' + Math.random().toString(36).substring(2, 10);
-
-      // Save to store
-      await setMyDeviceInfo(stableId, deviceName);
+      console.log(`🆔 Advertising as: ${deviceName} | UUID: ${uuid}`);
 
       Alert.alert(
         '✅ Broadcasting Started!',

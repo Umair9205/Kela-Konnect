@@ -3,12 +3,14 @@ import { router } from 'expo-router';
 import React, { useEffect, useRef, useState } from 'react';
 import { Alert, Button, FlatList, PermissionsAndroid, Platform, StyleSheet, Text, TouchableOpacity, View } from 'react-native';
 import { BleManager } from 'react-native-ble-plx';
+import BleClient from '../modules/BleClient';
 import { useAppStore } from '../store/appStore';
 
 const KELA_SERVICE_UUID = '0000FE00-0000-1000-8000-00805F9B34FB';
 
 interface KelaDevice {
-  id: string;
+  id: string;       // current BLE MAC (temporary)
+  uuid?: string;    // permanent UUID (read from identity characteristic)
   name: string;
   rssi: number;
   lastSeen: Date;
@@ -25,10 +27,13 @@ export default function BLETestScreen() {
 
   const scanTimeoutRef = useRef<NodeJS.Timeout | null>(null);
   const isScanningRef = useRef(false);
+  const updatedAddressesRef = useRef<Set<string>>(new Set());
 
-  const isFriend = useAppStore(state => state.isFriend);
+  const isFriendByUUID = useAppStore(state => state.isFriendByUUID);
+  const isFriendByName = useAppStore(state => state.isFriendByName);
   const addFriend = useAppStore(state => state.addFriend);
   const friends = useAppStore(state => state.friends);
+  const updateFriendMac = useAppStore(state => state.updateFriendMac);
 
   useEffect(() => {
     const checkDevice = async () => {
@@ -129,6 +134,7 @@ export default function BLETestScreen() {
     setError('');
     setScanning(true);
     isScanningRef.current = true;
+    updatedAddressesRef.current.clear();
 
     console.log('🔵 Starting filtered scan for Kela-Konnect devices...');
     console.log(`🔍 Looking for UUID: ${KELA_SERVICE_UUID}`);
@@ -137,7 +143,7 @@ export default function BLETestScreen() {
       bleManager.startDeviceScan(
         [KELA_SERVICE_UUID],
         null,
-        async (error, device) => {
+        (error, device) => {
           if (error) {
             console.error('❌ Scan error:', error);
             setError(`Scan error: ${error.message}`);
@@ -147,40 +153,71 @@ export default function BLETestScreen() {
 
           if (device) {
             console.log(`📡 Found Kela-Konnect device: ${device.name || 'Unnamed'} (${device.id})`);
-            
-            // ✅ FIX BUG 3: Check if this device name matches a QR-added friend (whose bleAddress = custom ID)
-            // If so, update their bleAddress to the real MAC address
-            const friendByName = friends.find(f => f.name === device.name && f.bleAddress !== device.id);
-            if (friendByName) {
-              console.log(`🔄 Updating BLE address for QR-added friend: ${device.name} → ${device.id}`);
-              await addFriend({
-                ...friendByName,
-                bleAddress: device.id,  // Update to real MAC
-              });
+
+            // ✅ Try to read permanent UUID from device (connect → read → disconnect)
+            // Only do this once per MAC per scan session
+            if (device.name && !updatedAddressesRef.current.has(device.id)) {
+              updatedAddressesRef.current.add(device.id);
+              (async () => {
+                try {
+                  await BleClient.connectToDevice(device.id);
+                  const identityJson = await BleClient.readDeviceIdentity(device.id);
+                  const identity = JSON.parse(identityJson);
+                  const { uuid, name } = identity;
+                  console.log(`🆔 Got UUID for ${name}: ${uuid}`);
+
+                  // Store UUID on the device object so handleAddFriend can use it
+                  setDevices(prev => prev.map(d =>
+                    d.id === device.id ? { ...d, uuid } : d
+                  ));
+
+                  // Update existing friend's MAC if known by UUID
+                  if (isFriendByUUID(uuid)) {
+                    updateFriendMac(uuid, device.id);
+                    console.log(`🔄 Updated MAC for friend ${name}: ${device.id}`);
+                  }
+                } catch (e) {
+                  // Couldn't read identity - device may not have it yet
+                }
+              })();
             }
 
-            const isDeviceFriend = isFriend(device.id) || !!friendByName;
-            
+            // Friend check: by UUID (via currentMac lookup) or by stored MAC
+            const isDeviceFriend = isFriendByName(device.name || '') ||
+              friends.some(f => f.currentMac === device.id);
+
             if (isDeviceFriend) {
-              console.log(`👥 Found FRIEND: ${device.name}`);
+              console.log(`👥 Found FRIEND: ${device.name} @ ${device.id}`);
             }
 
             setDevices((prevDevices) => {
-              const existingIndex = prevDevices.findIndex((d) => d.id === device.id);
-              
+              const deviceName = device.name || 'Unknown User';
+
+              // ✅ Deduplicate by NAME (not MAC) — handles Android MAC rotation
+              // If same name seen with new MAC, update existing entry's MAC
+              const existingByName = prevDevices.findIndex((d) => d.name === deviceName);
+              const existingByMac  = prevDevices.findIndex((d) => d.id === device.id);
+
               const newDevice: KelaDevice = {
-                id: device.id,
-                name: device.name || 'Unknown User',
+                id: device.id,          // always store latest MAC
+                name: deviceName,
                 rssi: device.rssi || -100,
                 lastSeen: new Date(),
                 isFriend: isDeviceFriend,
               };
 
-              if (existingIndex >= 0) {
+              if (existingByName >= 0) {
+                // Same device, possibly new MAC — update in place
                 const updated = [...prevDevices];
-                updated[existingIndex] = newDevice;
+                updated[existingByName] = { ...updated[existingByName], ...newDevice };
+                return updated;
+              } else if (existingByMac >= 0) {
+                // Same MAC — just update signal/timestamp
+                const updated = [...prevDevices];
+                updated[existingByMac] = newDevice;
                 return updated;
               } else {
+                // Genuinely new device
                 return [...prevDevices, newDevice];
               }
             });
@@ -228,10 +265,13 @@ export default function BLETestScreen() {
 
   const handleAddFriend = async (device: KelaDevice) => {
     try {
+      // ✅ Get UUID from identity cache (read during scan) or use MAC as fallback key
+      let friendUUID = device.uuid || device.id; // device.uuid set during scan if identity was read
+
       await addFriend({
-        id: device.name,
-        bleAddress: device.id,
+        uuid: friendUUID,
         name: device.name,
+        currentMac: device.id,
         addedDate: new Date(),
       });
 
