@@ -6,49 +6,39 @@ import { useAppStore } from '../store/appStore';
 export default function FriendsScreen() {
   const friends = useAppStore(state => state.friends);
   const removeFriend = useAppStore(state => state.removeFriend);
-  const loadData = useAppStore(state => state.loadData);       // ✅ was loadFriends
+  const loadData = useAppStore(state => state.loadData);
   const getCurrentMac = useAppStore(state => state.getCurrentMac);
 
   useEffect(() => {
-    loadData();                                                 // ✅ was loadFriends()
+    loadData();
   }, []);
 
-  const handleRemove = async (uuid: string) => {              // ✅ was bleAddress
+  const handleRemove = async (uuid: string) => {
     const friend = friends.find(f => f.uuid === uuid);
     if (!friend) return;
-
     Alert.alert(
       'Remove Friend?',
       `Remove ${friend.name}?`,
       [
         { text: 'Cancel', style: 'cancel' },
-        {
-          text: 'Remove',
-          style: 'destructive',
-          onPress: () => removeFriend(uuid)                    // ✅ uses uuid
-        }
+        { text: 'Remove', style: 'destructive', onPress: () => removeFriend(uuid) }
       ]
     );
   };
 
   const handleCall = (item: any) => {
-    // ✅ Use latest known MAC (handles Android MAC rotation)
     const latestMac = getCurrentMac(item.uuid) || item.currentMac;
     if (!latestMac) {
       Alert.alert(
         '⚠️ Device Not Seen Recently',
-        `Cannot call ${item.name} — scan for nearby users first to find their current BLE address.`
+        `Scan for nearby users first to find ${item.name}.`
       );
       return;
     }
     console.log(`📞 Calling ${item.name} | UUID: ${item.uuid} | MAC: ${latestMac}`);
     router.push({
       pathname: '/call',
-      params: {
-        friendId: latestMac,
-        friendName: item.name,
-        friendUUID: item.uuid,
-      }
+      params: { friendId: latestMac, friendName: item.name, friendUUID: item.uuid },
     });
   };
 
@@ -56,25 +46,23 @@ export default function FriendsScreen() {
     <View style={styles.container}>
       <Text style={styles.title}>👥 Friends</Text>
 
-      <TouchableOpacity
-        style={styles.scanButton}
-        onPress={() => router.push('/ble-test')}
-      >
-        <Text style={styles.scanButtonText}>🔍 Scan for Users</Text>
+      <TouchableOpacity style={styles.qrButton} onPress={() => router.push('/qr-code')}>
+        <Text style={styles.qrButtonText}>📷 Add Friend via QR Code</Text>
       </TouchableOpacity>
 
-      <Text style={styles.subtitle}>
-        Your Friends ({friends.length}):
-      </Text>
+      <TouchableOpacity style={styles.scanButton} onPress={() => router.push('/ble-test')}>
+        <Text style={styles.scanButtonText}>🔍 Scan for Nearby Users</Text>
+      </TouchableOpacity>
+
+      <Text style={styles.subtitle}>Your Friends ({friends.length}):</Text>
 
       <FlatList
         data={friends}
-        keyExtractor={(item) => item.uuid}                     // ✅ was item.bleAddress
+        keyExtractor={(item) => item.uuid}
         renderItem={({ item }) => (
           <View style={styles.friendItem}>
             <View style={styles.friendInfo}>
               <Text style={styles.friendName}>👤 {item.name}</Text>
-              {/* Show current MAC if known, else show UUID */}
               <Text style={styles.friendId}>
                 {item.currentMac
                   ? `MAC: ${item.currentMac}`
@@ -84,19 +72,11 @@ export default function FriendsScreen() {
                 Added: {new Date(item.addedDate).toLocaleDateString()}
               </Text>
             </View>
-
             <View style={styles.friendActions}>
-              <TouchableOpacity
-                style={styles.callButton}
-                onPress={() => handleCall(item)}
-              >
+              <TouchableOpacity style={styles.callButton} onPress={() => handleCall(item)}>
                 <Text style={styles.callButtonText}>📞</Text>
               </TouchableOpacity>
-
-              <TouchableOpacity
-                style={styles.removeButton}
-                onPress={() => handleRemove(item.uuid)}        // ✅ was item.bleAddress
-              >
+              <TouchableOpacity style={styles.removeButton} onPress={() => handleRemove(item.uuid)}>
                 <Text style={styles.removeButtonText}>🗑️</Text>
               </TouchableOpacity>
             </View>
@@ -107,7 +87,7 @@ export default function FriendsScreen() {
             <Text style={styles.emptyIcon}>👥</Text>
             <Text style={styles.emptyText}>
               No friends yet!{'\n\n'}
-              Scan for nearby users and add them
+              Scan a friend's QR code to add them.
             </Text>
           </View>
         }
@@ -116,7 +96,7 @@ export default function FriendsScreen() {
 
       <View style={styles.infoBox}>
         <Text style={styles.infoText}>
-          💡 Scan → Add Friends → Call Them!
+          💡 Add friends via QR code → Scan nearby → Call!
         </Text>
       </View>
     </View>
@@ -124,121 +104,27 @@ export default function FriendsScreen() {
 }
 
 const styles = StyleSheet.create({
-  container: {
-    flex: 1,
-    padding: 20,
-    backgroundColor: '#f5f5f5',
-  },
-  title: {
-    fontSize: 28,
-    fontWeight: 'bold',
-    marginTop: 40,
-    marginBottom: 20,
-    textAlign: 'center',
-    color: '#333',
-  },
-  scanButton: {
-    backgroundColor: '#2196F3',
-    padding: 18,
-    borderRadius: 12,
-    marginBottom: 30,
-    elevation: 2,
-  },
-  scanButtonText: {
-    color: '#fff',
-    fontSize: 18,
-    fontWeight: 'bold',
-    textAlign: 'center',
-  },
-  subtitle: {
-    fontSize: 18,
-    fontWeight: '600',
-    marginBottom: 10,
-    color: '#333',
-  },
-  list: {
-    flex: 1,
-  },
-  friendItem: {
-    flexDirection: 'row',
-    justifyContent: 'space-between',
-    alignItems: 'center',
-    backgroundColor: '#fff',
-    padding: 15,
-    borderRadius: 12,
-    marginBottom: 10,
-    borderLeftWidth: 4,
-    borderLeftColor: '#4CAF50',
-    elevation: 2,
-  },
-  friendInfo: {
-    flex: 1,
-  },
-  friendName: {
-    fontSize: 18,
-    fontWeight: 'bold',
-    color: '#333',
-    marginBottom: 4,
-  },
-  friendId: {
-    fontSize: 11,
-    color: '#999',
-    marginBottom: 2,
-    fontFamily: 'monospace',
-  },
-  friendDate: {
-    fontSize: 11,
-    color: '#bbb',
-  },
-  friendActions: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: 10,
-  },
-  callButton: {
-    width: 50,
-    height: 50,
-    borderRadius: 25,
-    backgroundColor: '#4CAF50',
-    justifyContent: 'center',
-    alignItems: 'center',
-    elevation: 2,
-  },
-  callButtonText: {
-    fontSize: 24,
-  },
-  removeButton: {
-    width: 50,
-    height: 50,
-    justifyContent: 'center',
-    alignItems: 'center',
-  },
-  removeButtonText: {
-    fontSize: 24,
-  },
-  emptyContainer: {
-    alignItems: 'center',
-    marginTop: 60,
-  },
-  emptyIcon: {
-    fontSize: 64,
-    marginBottom: 20,
-  },
-  emptyText: {
-    textAlign: 'center',
-    color: '#999',
-    fontSize: 16,
-    lineHeight: 24,
-  },
-  infoBox: {
-    backgroundColor: '#E3F2FD',
-    padding: 12,
-    borderRadius: 8,
-    marginTop: 10,
-  },
-  infoText: {
-    fontSize: 14,
-    color: '#666',
-    textAlign: 'center',
-  },
+  container: { flex: 1, padding: 20, backgroundColor: '#f5f5f5' },
+  title: { fontSize: 28, fontWeight: 'bold', marginTop: 40, marginBottom: 20, textAlign: 'center', color: '#333' },
+  qrButton: { backgroundColor: '#4CAF50', padding: 18, borderRadius: 12, marginBottom: 12, elevation: 2 },
+  qrButtonText: { color: '#fff', fontSize: 18, fontWeight: 'bold', textAlign: 'center' },
+  scanButton: { backgroundColor: '#2196F3', padding: 18, borderRadius: 12, marginBottom: 24, elevation: 2 },
+  scanButtonText: { color: '#fff', fontSize: 18, fontWeight: 'bold', textAlign: 'center' },
+  subtitle: { fontSize: 18, fontWeight: '600', marginBottom: 10, color: '#333' },
+  list: { flex: 1 },
+  friendItem: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', backgroundColor: '#fff', padding: 15, borderRadius: 12, marginBottom: 10, borderLeftWidth: 4, borderLeftColor: '#4CAF50', elevation: 2 },
+  friendInfo: { flex: 1 },
+  friendName: { fontSize: 18, fontWeight: 'bold', color: '#333', marginBottom: 4 },
+  friendId: { fontSize: 11, color: '#999', marginBottom: 2, fontFamily: 'monospace' },
+  friendDate: { fontSize: 11, color: '#bbb' },
+  friendActions: { flexDirection: 'row', alignItems: 'center', gap: 10 },
+  callButton: { width: 50, height: 50, borderRadius: 25, backgroundColor: '#4CAF50', justifyContent: 'center', alignItems: 'center', elevation: 2 },
+  callButtonText: { fontSize: 24 },
+  removeButton: { width: 50, height: 50, justifyContent: 'center', alignItems: 'center' },
+  removeButtonText: { fontSize: 24 },
+  emptyContainer: { alignItems: 'center', marginTop: 60 },
+  emptyIcon: { fontSize: 64, marginBottom: 20 },
+  emptyText: { textAlign: 'center', color: '#999', fontSize: 16, lineHeight: 24 },
+  infoBox: { backgroundColor: '#E3F2FD', padding: 12, borderRadius: 8, marginTop: 10 },
+  infoText: { fontSize: 14, color: '#666', textAlign: 'center' },
 });

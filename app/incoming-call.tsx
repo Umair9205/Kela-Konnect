@@ -1,222 +1,207 @@
 import { router, useLocalSearchParams } from 'expo-router';
-import React, { useEffect, useState } from 'react';
-import { StyleSheet, Text, TouchableOpacity, Vibration, View } from 'react-native';
+import React, { useEffect, useRef, useState } from 'react';
 import {
-  mediaDevices,
-  MediaStream,
-  MediaStreamTrack,
-  RTCPeerConnection,
-  RTCSessionDescription,
-} from 'react-native-webrtc';
+  PermissionsAndroid, Platform,
+  StyleSheet, Text, TouchableOpacity,
+  Vibration,
+  View
+} from 'react-native';
+import AudioStream from '../modules/AudioStream';
+import WifiDirect from '../modules/WifiDirect';
 import { signalingManager } from '../services/CallSignaling';
+import { useAppStore } from '../store/appStore';
+
+type CallState = 'ringing' | 'connecting' | 'active' | 'ended';
 
 export default function IncomingCallScreen() {
-  const params = useLocalSearchParams();
-  const callerName = params.callerName as string;
-  const callerId = params.callerId as string;
-  const offerSdp = params.offerSdp as string;
+  const { callerId, callerName, callerMac } = useLocalSearchParams<{
+    callerId: string;   // caller's permanent UUID
+    callerName: string;
+    callerMac: string;  // caller's current BLE MAC
+  }>();
 
-  const [callState, setCallState] = useState<'ringing' | 'active' | 'ended'>('ringing');
-  const [duration, setDuration] = useState(0);
+  const myUUID = useAppStore(state => state.myUUID);
+  const myDeviceName = useAppStore(state => state.myDeviceName);
 
-  const peerConnection = React.useRef<RTCPeerConnection | null>(null);
-  const localStream = React.useRef<MediaStream | null>(null);
-  const callTimer = React.useRef<NodeJS.Timeout | null>(null);
+  const [callState, setCallState] = useState<CallState>('ringing');
+  const [statusText, setStatusText] = useState(`${callerName} is calling...`);
+  const [callDuration, setCallDuration] = useState(0);
+
+  const timerRef = useRef<NodeJS.Timeout | null>(null);
+  const callStartRef = useRef<number>(0);
+  const cleanedUp = useRef(false);
 
   useEffect(() => {
-    // Vibrate on incoming call
     Vibration.vibrate([500, 500, 500, 500], true);
+
+    // Listen for caller ending/cancelling while ringing
+    const handleEnd = ({ signal }: any) => {
+      if (signal.from !== callerId) return;
+      Vibration.cancel();
+      cleanup();
+      router.back();
+    };
+    signalingManager.on('call-end', handleEnd);
 
     return () => {
       Vibration.cancel();
+      signalingManager.off('call-end', handleEnd);
       cleanup();
     };
   }, []);
 
   useEffect(() => {
     if (callState === 'active') {
-      Vibration.cancel();
-      callTimer.current = setInterval(() => {
-        setDuration(prev => prev + 1);
+      callStartRef.current = Date.now();
+      timerRef.current = setInterval(() => {
+        setCallDuration(Math.floor((Date.now() - callStartRef.current) / 1000));
       }, 1000);
     }
-    return () => {
-      if (callTimer.current) {
-        clearInterval(callTimer.current);
-      }
-    };
+    return () => { if (timerRef.current) clearInterval(timerRef.current); };
   }, [callState]);
 
-  const handleAccept = async () => {
+  const acceptCall = async () => {
     try {
-      console.log('✅ Accepting call from', callerName);
       Vibration.cancel();
+      setCallState('connecting');
+      setStatusText('Connecting...');
 
-      // Get microphone
-      const stream = await mediaDevices.getUserMedia({
-        audio: true,
-        video: false,
-      }) as MediaStream;
-      localStream.current = stream;
-
-      // Create peer connection
-      peerConnection.current = new RTCPeerConnection({
-        iceServers: [
-          { urls: 'stun:stun.l.google.com:19302' },
-          { urls: 'stun:stun1.l.google.com:19302' },
-        ],
-      });
-
-      // Add tracks
-      stream.getTracks().forEach((track: MediaStreamTrack) => {
-        if (peerConnection.current && localStream.current) {
-          peerConnection.current.addTrack(track, localStream.current);
+      if (Platform.OS === 'android') {
+        const granted = await PermissionsAndroid.request(
+          PermissionsAndroid.PERMISSIONS.RECORD_AUDIO
+        );
+        if (granted !== PermissionsAndroid.RESULTS.GRANTED) {
+          rejectCall();
+          return;
         }
-      });
-
-      // Handle ICE candidates
-      (peerConnection.current as any).onicecandidate = (event: any) => {
-        if (event.candidate) {
-          signalingManager.sendIceCandidate(callerId, event.candidate);
-        }
-      };
-
-      // Handle remote stream
-      (peerConnection.current as any).ontrack = (event: any) => {
-        console.log('🔊 Remote stream received');
-      };
-
-      // Set remote description (the offer)
-      // ✅ Guard: only parse if offerSdp is a real SDP string
-      if (!offerSdp || offerSdp === '' || offerSdp === 'null' || offerSdp === 'undefined') {
-        console.log('⚠️ No offer SDP received - waiting for offer via BLE signaling');
-        
-        // Listen for the offer to arrive via BLE instead
-        signalingManager.on('offer', async (data: any) => {
-          if (data.from === callerId) {
-            try {
-              const receivedOffer = data.data?.sdp;
-              await peerConnection.current?.setRemoteDescription(new RTCSessionDescription(receivedOffer));
-              const answer = await peerConnection.current!.createAnswer();
-              await peerConnection.current!.setLocalDescription(answer);
-              await signalingManager.sendAnswer(callerId, answer);
-              setCallState('active');
-            } catch (err) {
-              console.error('❌ Error handling late offer:', err);
-            }
-          }
-        });
-        return;
       }
 
-      const offer = JSON.parse(offerSdp);
-      await peerConnection.current.setRemoteDescription(
-        new RTCSessionDescription(offer)
+      // Set up listener for credentials BEFORE sending accept
+      // Caller sends credentials in a second 'call-accept' message after receiving our accept
+      const handleCredentials = async ({ signal }: any) => {
+        if (signal.from !== callerId) return;
+        if (!signal.data?.isCredentials) return;  // ignore our own accept echo
+        signalingManager.off('call-accept', handleCredentials);
+
+        const { ssid, passphrase } = signal.data;
+        console.log(`📶 Got WiFi credentials: ${ssid}`);
+        setStatusText('Joining audio channel...');
+
+        // Listen for audio ready
+        const audioSub = WifiDirect.onAudioReady(() => {
+          audioSub.remove();
+          setCallState('active');
+          setStatusText('Connected');
+          startAudio();
+        });
+
+        WifiDirect.onConnectionFailed((e) => {
+          console.error('❌ WiFi Direct failed:', e.error);
+          endCall();
+        });
+
+        // Join caller's WiFi Direct group
+        try {
+          await WifiDirect.joinGroup(ssid, passphrase);
+        } catch (e: any) {
+          console.error('❌ joinGroup failed:', e);
+          setStatusText('Connection failed');
+          setTimeout(() => endCall(), 1500);
+        }
+      };
+
+      signalingManager.on('call-accept', handleCredentials);
+
+      // Also keep listening for call-end from caller
+      const handleEnd = ({ signal }: any) => {
+        if (signal.from !== callerId) return;
+        signalingManager.off('call-end', handleEnd);
+        endCall();
+      };
+      signalingManager.on('call-end', handleEnd);
+
+      // Send accept — caller will respond with credentials
+      console.log(`✅ Accepting call from ${callerName}`);
+      await signalingManager.sendCallAccept(
+        callerMac, callerId, myDeviceName || 'Unknown'
       );
 
-      // Create answer
-      const answer = await peerConnection.current.createAnswer();
-      await peerConnection.current.setLocalDescription(answer);
-
-      // Send answer via BLE
-      await signalingManager.sendAnswer(callerId, answer);
-      console.log('📤 Answer sent to', callerName);
-
-      // Listen for ICE candidates from caller
-      signalingManager.on('ice-candidate', (data: any) => {
-        if (data.from === callerId && data.data?.candidate) {
-          peerConnection.current?.addIceCandidate(data.data.candidate)
-            .then(() => console.log('✅ ICE candidate added'))
-            .catch((err: any) => console.error('❌ ICE error:', err));
-        }
-      });
-
-      // Listen for call end
-      signalingManager.on('call-end', (data: any) => {
-        if (data.from === callerId) {
-          console.log('📴 Caller ended the call');
-          endCall();
-        }
-      });
-
-      setCallState('active');
-
-    } catch (error) {
-      console.error('❌ Error accepting call:', error);
-      endCall();
+    } catch (err: any) {
+      console.error('❌ Accept error:', err);
+      setStatusText('Error connecting');
+      setTimeout(() => endCall(), 1500);
     }
   };
 
-  const handleReject = async () => {
-    console.log('❌ Rejecting call from', callerName);
-    await signalingManager.sendCallReject(callerId);
-    endCall();
+  const rejectCall = async () => {
+    Vibration.cancel();
+    await signalingManager.sendCallReject(callerMac, callerId).catch(() => {});
+    cleanup();
+    router.back();
+  };
+
+  const endCall = async () => {
+    if (cleanedUp.current) return;
+    setCallState('ended');
+    setStatusText('Call ended');
+    await signalingManager.sendCallEnd(callerMac, callerId).catch(() => {});
+    cleanup();
+    setTimeout(() => router.back(), 800);
+  };
+
+  const startAudio = () => {
+    AudioStream.startCapture((b64: string) => {
+      WifiDirect.sendAudio(b64).catch(() => {});
+    });
+    WifiDirect.onAudioReceived((e) => {
+      AudioStream.playback(e.data);
+    });
   };
 
   const cleanup = () => {
-    if (callTimer.current) clearInterval(callTimer.current);
-    if (localStream.current) {
-      localStream.current.getTracks().forEach((t: MediaStreamTrack) => t.stop());
-      localStream.current = null;
-    }
-    if (peerConnection.current) {
-      peerConnection.current.close();
-      peerConnection.current = null;
-    }
+    if (cleanedUp.current) return;
+    cleanedUp.current = true;
+    Vibration.cancel();
+    AudioStream.stop();
+    WifiDirect.removeGroup();
+    WifiDirect.removeAllListeners();
+    if (timerRef.current) clearInterval(timerRef.current);
   };
 
-  const endCall = () => {
-    cleanup();
-    setCallState('ended');
-    signalingManager.sendCallEnd(callerId).catch(console.error);
-    setTimeout(() => router.back(), 1000);
-  };
-
-  const formatDuration = (seconds: number) => {
-    const mins = Math.floor(seconds / 60);
-    const secs = seconds % 60;
-    return `${mins.toString().padStart(2, '0')}:${secs.toString().padStart(2, '0')}`;
-  };
+  const fmt = (s: number) =>
+    `${Math.floor(s / 60).toString().padStart(2,'0')}:${(s % 60).toString().padStart(2,'0')}`;
 
   return (
     <View style={styles.container}>
-      <View style={styles.callerInfo}>
-        <Text style={styles.callerIcon}>📞</Text>
-        <Text style={styles.callerName}>{callerName}</Text>
-        <Text style={styles.callStatus}>
-          {callState === 'ringing' && '📲 Incoming Call...'}
-          {callState === 'active' && formatDuration(duration)}
-          {callState === 'ended' && '📴 Call Ended'}
-        </Text>
+      <View style={[styles.avatarRing, {
+        borderColor: callState === 'active' ? '#4CAF50' : '#2196F3'
+      }]}>
+        <Text style={styles.avatar}>👤</Text>
       </View>
 
-      {callState === 'ringing' && (
-        <View style={styles.actionButtons}>
-          <TouchableOpacity
-            style={styles.rejectButton}
-            onPress={handleReject}
-          >
-            <Text style={styles.actionIcon}>📵</Text>
-            <Text style={styles.actionLabel}>Decline</Text>
-          </TouchableOpacity>
+      <Text style={styles.name}>{callerName}</Text>
+      <Text style={styles.status}>{statusText}</Text>
 
-          <TouchableOpacity
-            style={styles.acceptButton}
-            onPress={handleAccept}
-          >
-            <Text style={styles.actionIcon}>📞</Text>
-            <Text style={styles.actionLabel}>Accept</Text>
+      {callState === 'active' && (
+        <Text style={styles.duration}>{fmt(callDuration)}</Text>
+      )}
+
+      {callState === 'ringing' && (
+        <View style={styles.ringtoneRow}>
+          <TouchableOpacity style={styles.rejectBtn} onPress={rejectCall}>
+            <Text style={styles.btnIcon}>📵</Text>
+            <Text style={styles.btnLabel}>Decline</Text>
+          </TouchableOpacity>
+          <TouchableOpacity style={styles.acceptBtn} onPress={acceptCall}>
+            <Text style={styles.btnIcon}>📞</Text>
+            <Text style={styles.btnLabel}>Accept</Text>
           </TouchableOpacity>
         </View>
       )}
 
-      {callState === 'active' && (
-        <TouchableOpacity
-          style={styles.endCallButton}
-          onPress={endCall}
-        >
-          <Text style={styles.endCallIcon}>📞</Text>
-          <Text style={styles.endCallText}>End Call</Text>
+      {(callState === 'connecting' || callState === 'active') && (
+        <TouchableOpacity style={styles.endBtn} onPress={endCall}>
+          <Text style={styles.btnIcon}>📵</Text>
         </TouchableOpacity>
       )}
     </View>
@@ -224,77 +209,16 @@ export default function IncomingCallScreen() {
 }
 
 const styles = StyleSheet.create({
-  container: {
-    flex: 1,
-    backgroundColor: '#1a1a1a',
-    justifyContent: 'space-between',
-    padding: 40,
-  },
-  callerInfo: {
-    alignItems: 'center',
-    marginTop: 120,
-  },
-  callerIcon: {
-    fontSize: 80,
-    marginBottom: 20,
-  },
-  callerName: {
-    fontSize: 36,
-    fontWeight: 'bold',
-    color: '#fff',
-    marginBottom: 15,
-  },
-  callStatus: {
-    fontSize: 20,
-    color: '#999',
-  },
-  actionButtons: {
-    flexDirection: 'row',
-    justifyContent: 'space-around',
-    marginBottom: 60,
-  },
-  rejectButton: {
-    width: 90,
-    height: 90,
-    borderRadius: 45,
-    backgroundColor: '#F44336',
-    justifyContent: 'center',
-    alignItems: 'center',
-    elevation: 5,
-  },
-  acceptButton: {
-    width: 90,
-    height: 90,
-    borderRadius: 45,
-    backgroundColor: '#4CAF50',
-    justifyContent: 'center',
-    alignItems: 'center',
-    elevation: 5,
-  },
-  actionIcon: {
-    fontSize: 36,
-  },
-  actionLabel: {
-    color: '#fff',
-    fontSize: 12,
-    marginTop: 4,
-    fontWeight: 'bold',
-  },
-  endCallButton: {
-    backgroundColor: '#F44336',
-    paddingVertical: 20,
-    borderRadius: 50,
-    alignItems: 'center',
-    marginBottom: 60,
-    elevation: 5,
-  },
-  endCallIcon: {
-    fontSize: 32,
-    marginBottom: 5,
-  },
-  endCallText: {
-    color: '#fff',
-    fontSize: 18,
-    fontWeight: 'bold',
-  },
+  container: { flex: 1, backgroundColor: '#1a1a2e', alignItems: 'center', justifyContent: 'center', padding: 40 },
+  avatarRing: { width: 120, height: 120, borderRadius: 60, backgroundColor: '#16213e', alignItems: 'center', justifyContent: 'center', marginBottom: 24, borderWidth: 3 },
+  avatar: { fontSize: 64 },
+  name: { fontSize: 32, fontWeight: 'bold', color: '#fff', marginBottom: 12 },
+  status: { fontSize: 18, color: '#aaa', marginBottom: 8, textAlign: 'center' },
+  duration: { fontSize: 24, color: '#4CAF50', fontFamily: 'monospace', marginBottom: 8 },
+  ringtoneRow: { position: 'absolute', bottom: 80, flexDirection: 'row', gap: 80 },
+  rejectBtn: { width: 80, height: 80, borderRadius: 40, backgroundColor: '#f44336', alignItems: 'center', justifyContent: 'center', elevation: 4 },
+  acceptBtn: { width: 80, height: 80, borderRadius: 40, backgroundColor: '#4CAF50', alignItems: 'center', justifyContent: 'center', elevation: 4 },
+  endBtn: { position: 'absolute', bottom: 80, width: 80, height: 80, borderRadius: 40, backgroundColor: '#f44336', alignItems: 'center', justifyContent: 'center', elevation: 4 },
+  btnIcon: { fontSize: 32 },
+  btnLabel: { fontSize: 11, color: '#fff', marginTop: 2 },
 });
