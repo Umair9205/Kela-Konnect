@@ -68,10 +68,7 @@ class CallSignalingManager {
 
     try {
       await BleClient.connectToDevice(currentMac);
-      // Wait for GATT service discovery to complete before writing
-      // connectToDevice resolves immediately after connectGatt() but
-      // services are discovered asynchronously (~500-1500ms)
-      await new Promise(resolve => setTimeout(resolve, 1500));
+      // connectToDevice now resolves ONLY after service discovery completes
       await BleClient.sendSignalToDevice(currentMac, payload);
       console.log(`✅ ${signal.type} sent`);
       return true;

@@ -1,9 +1,6 @@
 import { router, useLocalSearchParams } from 'expo-router';
 import React, { useEffect, useRef, useState } from 'react';
-import {
-  Alert, PermissionsAndroid, Platform,
-  StyleSheet, Text, TouchableOpacity, View
-} from 'react-native';
+import { Alert, PermissionsAndroid, Platform, StyleSheet, Text, TouchableOpacity, View } from 'react-native';
 import AudioStream from '../modules/AudioStream';
 import WifiDirect from '../modules/WifiDirect';
 import { signalingManager } from '../services/CallSignaling';
@@ -13,9 +10,7 @@ type CallState = 'creating-group' | 'calling' | 'waiting' | 'connecting' | 'acti
 
 export default function CallScreen() {
   const { friendId, friendName, friendUUID } = useLocalSearchParams<{
-    friendId: string;
-    friendName: string;
-    friendUUID: string;
+    friendId: string; friendName: string; friendUUID: string;
   }>();
 
   const myUUID = useAppStore(state => state.myUUID);
@@ -28,6 +23,10 @@ export default function CallScreen() {
   const timerRef = useRef<NodeJS.Timeout | null>(null);
   const callStartRef = useRef<number>(0);
   const cleanedUp = useRef(false);
+  // Keep credentials in ref for use inside async callbacks
+  const credentialsRef = useRef<{ ssid: string; passphrase: string } | null>(null);
+  const friendUUIDRef = useRef(friendUUID);
+  const friendIdRef = useRef(friendId);
 
   useEffect(() => {
     startCall();
@@ -47,19 +46,16 @@ export default function CallScreen() {
 
   const startCall = async () => {
     try {
-      // 1. Request mic permission
+      // 1. Mic permission
       if (Platform.OS === 'android') {
-        const granted = await PermissionsAndroid.request(
-          PermissionsAndroid.PERMISSIONS.RECORD_AUDIO
-        );
+        const granted = await PermissionsAndroid.request(PermissionsAndroid.PERMISSIONS.RECORD_AUDIO);
         if (granted !== PermissionsAndroid.RESULTS.GRANTED) {
           Alert.alert('Permission denied', 'Microphone access required for calls');
-          router.back();
-          return;
+          router.back(); return;
         }
       }
 
-      // 2. Create WiFi Direct group FIRST — we are Group Owner
+      // 2. Create WiFi Direct group — we are always Group Owner (caller)
       setCallState('creating-group');
       setStatusText('Preparing connection...');
       console.log('📶 Creating WiFi Direct group...');
@@ -67,19 +63,16 @@ export default function CallScreen() {
       let credentials: { ssid: string; passphrase: string };
       try {
         credentials = await WifiDirect.createGroup();
+        credentialsRef.current = credentials;
         console.log(`📶 Group ready: ${credentials.ssid}`);
       } catch (e: any) {
         Alert.alert('Setup failed', 'Could not create WiFi Direct group: ' + e?.message);
-        router.back();
-        return;
+        router.back(); return;
       }
 
-      // 3. Set up listeners BEFORE sending call-request
-      //    This prevents any race condition where accept arrives before we listen
-
-      // Listen for call-reject
+      // 3. Register ALL listeners BEFORE sending call-request
       const handleReject = ({ signal }: any) => {
-        if (signal.from !== friendUUID) return;
+        if (signal.from !== friendUUIDRef.current) return;
         signalingManager.off('call-reject', handleReject);
         signalingManager.off('call-accept', handleAcceptAck);
         signalingManager.off('call-end', handleRemoteEnd);
@@ -88,31 +81,35 @@ export default function CallScreen() {
         setTimeout(() => router.back(), 1500);
       };
 
-      // Listen for call-accept ACK from callee (just their acceptance, no creds)
       const handleAcceptAck = async ({ signal, fromMac }: any) => {
-        if (signal.from !== friendUUID) return;
+        if (signal.from !== friendUUIDRef.current) return;
+        if (signal.data?.isCredentials) return; // ignore our own cred message echoed back
         signalingManager.off('call-accept', handleAcceptAck);
         signalingManager.off('call-reject', handleReject);
-        console.log(`✅ Callee accepted. Sending WiFi credentials to ${fromMac}`);
+        console.log(`✅ Callee accepted. Sending credentials to ${fromMac}`);
         setCallState('connecting');
         setStatusText('Sharing connection details...');
 
-        // Send credentials to callee so they can join our group
-        await signalingManager.sendSignal(fromMac, {
-          type: 'call-accept',
-          from: myUUID!,
-          to: friendUUID,
-          data: {
-            ssid: credentials.ssid,
-            passphrase: credentials.passphrase,
-            isCredentials: true,
-          }
-        });
+        // Send WiFi credentials to callee
+        try {
+          await signalingManager.sendSignal(fromMac, {
+            type: 'call-accept',
+            from: myUUID!,
+            to: friendUUIDRef.current,
+            data: {
+              ssid: credentialsRef.current!.ssid,
+              passphrase: credentialsRef.current!.passphrase,
+              isCredentials: true,
+            }
+          });
+        } catch (e) {
+          console.error('❌ Failed to send credentials:', e);
+          endCall();
+        }
       };
 
-      // Listen for remote call-end
       const handleRemoteEnd = ({ signal }: any) => {
-        if (signal.from !== friendUUID) return;
+        if (signal.from !== friendUUIDRef.current) return;
         cleanup();
         setCallState('ended');
         setStatusText('Call ended');
@@ -123,7 +120,7 @@ export default function CallScreen() {
       signalingManager.on('call-accept', handleAcceptAck);
       signalingManager.on('call-end', handleRemoteEnd);
 
-      // Listen for WiFi Direct audio socket ready
+      // WiFi Direct audio socket ready
       const audioReadySub = WifiDirect.onAudioReady(() => {
         audioReadySub.remove();
         setCallState('active');
@@ -131,23 +128,20 @@ export default function CallScreen() {
         startAudio();
       });
 
-      WifiDirect.onConnectionFailed((e) => {
-        console.error('❌ WiFi Direct failed:', e.error);
-        endCall();
-      });
+      WifiDirect.onConnectionFailed(() => endCall());
 
-      // 4. Now send call-request
+      // 4. Send call-request via BLE
       setCallState('calling');
       setStatusText(`Calling ${friendName}...`);
+      console.log(`📤 Sending call-request to UUID: ${friendUUIDRef.current} MAC: ${friendIdRef.current}`);
 
       const sent = await signalingManager.sendCallRequest(
-        friendId, friendUUID, myDeviceName || 'Unknown'
+        friendIdRef.current, friendUUIDRef.current, myDeviceName || 'Unknown'
       );
 
       if (!sent) {
-        Alert.alert('Call failed', 'Could not reach device. Make sure they are nearby.');
-        cleanup();
-        router.back();
+        Alert.alert('Call failed', 'Could not reach device. Make sure they are nearby and their app is open.');
+        cleanup(); router.back(); return;
       }
 
       setCallState('waiting');
@@ -156,8 +150,7 @@ export default function CallScreen() {
     } catch (err: any) {
       console.error('❌ Call error:', err);
       Alert.alert('Call failed', err?.message || 'Unknown error');
-      cleanup();
-      router.back();
+      cleanup(); router.back();
     }
   };
 
@@ -165,7 +158,7 @@ export default function CallScreen() {
     AudioStream.startCapture((b64: string) => {
       WifiDirect.sendAudio(b64).catch(() => {});
     });
-    WifiDirect.onAudioReceived((e) => {
+    WifiDirect.onAudioReceived((e: any) => {
       AudioStream.playback(e.data);
     });
   };
@@ -174,9 +167,9 @@ export default function CallScreen() {
     if (cleanedUp.current) return;
     setCallState('ended');
     setStatusText('Call ended');
-    if (friendId && friendUUID) {
-      await signalingManager.sendCallEnd(friendId, friendUUID).catch(() => {});
-    }
+    try {
+      await signalingManager.sendCallEnd(friendIdRef.current, friendUUIDRef.current);
+    } catch (e) {}
     cleanup();
     setTimeout(() => router.back(), 800);
   };
@@ -188,42 +181,23 @@ export default function CallScreen() {
     WifiDirect.removeGroup();
     WifiDirect.removeAllListeners();
     if (timerRef.current) clearInterval(timerRef.current);
-    signalingManager.off('call-reject', () => {});
-    signalingManager.off('call-accept', () => {});
-    signalingManager.off('call-end', () => {});
   };
 
   const fmt = (s: number) =>
-    `${Math.floor(s / 60).toString().padStart(2,'0')}:${(s % 60).toString().padStart(2,'0')}`;
-
-  const stateColor = () => {
-    if (callState === 'active') return '#4CAF50';
-    if (callState === 'ended') return '#f44336';
-    return '#2196F3';
-  };
+    `${Math.floor(s / 60).toString().padStart(2, '0')}:${(s % 60).toString().padStart(2, '0')}`;
 
   return (
     <View style={styles.container}>
-      <View style={[styles.avatarRing, { borderColor: stateColor() }]}>
+      <View style={[styles.avatarRing, {
+        borderColor: callState === 'active' ? '#4CAF50' : callState === 'ended' ? '#f44336' : '#2196F3'
+      }]}>
         <Text style={styles.avatar}>👤</Text>
       </View>
-
       <Text style={styles.name}>{friendName}</Text>
       <Text style={styles.status}>{statusText}</Text>
-
-      {callState === 'active' && (
-        <Text style={styles.duration}>{fmt(callDuration)}</Text>
-      )}
-
-      {callState !== 'active' && callState !== 'ended' && (
-        <Text style={styles.spinner}>⏳</Text>
-      )}
-
-      <TouchableOpacity
-        style={styles.endBtn}
-        onPress={endCall}
-        disabled={callState === 'ended'}
-      >
+      {callState === 'active' && <Text style={styles.duration}>{fmt(callDuration)}</Text>}
+      {callState !== 'active' && callState !== 'ended' && <Text style={styles.spinner}>⏳</Text>}
+      <TouchableOpacity style={styles.endBtn} onPress={endCall} disabled={callState === 'ended'}>
         <Text style={styles.endBtnText}>📵</Text>
       </TouchableOpacity>
     </View>
