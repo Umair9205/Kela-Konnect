@@ -1,217 +1,178 @@
 import { router, useLocalSearchParams } from 'expo-router';
 import React, { useEffect, useRef, useState } from 'react';
-import { Alert, PermissionsAndroid, Platform, StyleSheet, Text, TouchableOpacity, View } from 'react-native';
+import { Alert, ImageBackground, PermissionsAndroid, Platform, StatusBar, StyleSheet, Text, TouchableOpacity, View } from 'react-native';
 import AudioStream from '../modules/AudioStream';
 import WifiDirect from '../modules/WifiDirect';
 import { signalingManager } from '../services/CallSignaling';
 import { useAppStore } from '../store/appStore';
 
+const BG = require('../assets/images/banana-bg.png');
 type CallState = 'creating-group' | 'calling' | 'waiting' | 'connecting' | 'active' | 'ended';
 
 export default function CallScreen() {
-  const { friendId, friendName, friendUUID } = useLocalSearchParams<{
-    friendId: string; friendName: string; friendUUID: string;
-  }>();
-
-  const myUUID = useAppStore(state => state.myUUID);
-  const myDeviceName = useAppStore(state => state.myDeviceName);
+  const { friendId, friendName, friendUUID } = useLocalSearchParams<{ friendId: string; friendName: string; friendUUID: string; }>();
+  const myUUID = useAppStore(s => s.myUUID);
+  const myDeviceName = useAppStore(s => s.myDeviceName);
 
   const [callState, setCallState] = useState<CallState>('creating-group');
   const [statusText, setStatusText] = useState('Setting up...');
   const [callDuration, setCallDuration] = useState(0);
 
   const timerRef = useRef<NodeJS.Timeout | null>(null);
-  const callStartRef = useRef<number>(0);
+  const callStartRef = useRef(0);
   const cleanedUp = useRef(false);
-  // Keep credentials in ref for use inside async callbacks
-  const credentialsRef = useRef<{ ssid: string; passphrase: string } | null>(null);
-  const friendUUIDRef = useRef(friendUUID);
-  const friendIdRef = useRef(friendId);
+  const credRef = useRef<{ ssid: string; passphrase: string } | null>(null);
+  const uuidRef = useRef(friendUUID);
+  const idRef = useRef(friendId);
 
-  useEffect(() => {
-    startCall();
-    return () => { cleanup(); };
-  }, []);
-
+  useEffect(() => { startCall(); return () => cleanup(); }, []);
   useEffect(() => {
     if (callState === 'active') {
       callStartRef.current = Date.now();
-      timerRef.current = setInterval(() => {
-        setCallDuration(Math.floor((Date.now() - callStartRef.current) / 1000));
-      }, 1000);
-    } else {
-      if (timerRef.current) clearInterval(timerRef.current);
-    }
+      timerRef.current = setInterval(() => setCallDuration(Math.floor((Date.now() - callStartRef.current) / 1000)), 1000);
+    } else if (timerRef.current) clearInterval(timerRef.current);
   }, [callState]);
 
   const startCall = async () => {
     try {
-      // 1. Mic permission
       if (Platform.OS === 'android') {
-        const granted = await PermissionsAndroid.request(PermissionsAndroid.PERMISSIONS.RECORD_AUDIO);
-        if (granted !== PermissionsAndroid.RESULTS.GRANTED) {
-          Alert.alert('Permission denied', 'Microphone access required for calls');
-          router.back(); return;
-        }
+        const g = await PermissionsAndroid.request(PermissionsAndroid.PERMISSIONS.RECORD_AUDIO);
+        if (g !== PermissionsAndroid.RESULTS.GRANTED) { Alert.alert('Permission required', 'Mic access needed for calls'); router.back(); return; }
       }
+      setCallState('creating-group'); setStatusText('Preparing connection...');
+      const creds = await WifiDirect.createGroup();
+      credRef.current = creds;
 
-      // 2. Create WiFi Direct group — we are always Group Owner (caller)
-      setCallState('creating-group');
-      setStatusText('Preparing connection...');
-      console.log('📶 Creating WiFi Direct group...');
-
-      let credentials: { ssid: string; passphrase: string };
-      try {
-        credentials = await WifiDirect.createGroup();
-        credentialsRef.current = credentials;
-        console.log(`📶 Group ready: ${credentials.ssid}`);
-      } catch (e: any) {
-        Alert.alert('Setup failed', 'Could not create WiFi Direct group: ' + e?.message);
-        router.back(); return;
-      }
-
-      // 3. Register ALL listeners BEFORE sending call-request
       const handleReject = ({ signal }: any) => {
-        if (signal.from !== friendUUIDRef.current) return;
+        if (signal.from !== uuidRef.current) return;
         signalingManager.off('call-reject', handleReject);
-        signalingManager.off('call-accept', handleAcceptAck);
-        signalingManager.off('call-end', handleRemoteEnd);
-        setCallState('ended');
-        setStatusText('Call declined');
+        signalingManager.off('call-accept', handleAccept);
+        signalingManager.off('call-end', handleEnd);
+        setCallState('ended'); setStatusText('Call declined');
         setTimeout(() => router.back(), 1500);
       };
-
-      const handleAcceptAck = async ({ signal, fromMac }: any) => {
-        if (signal.from !== friendUUIDRef.current) return;
-        if (signal.data?.isCredentials) return; // ignore our own cred message echoed back
-        signalingManager.off('call-accept', handleAcceptAck);
+      const handleAccept = async ({ signal, fromMac }: any) => {
+        if (signal.from !== uuidRef.current) return;
+        if (signal.data?.isCredentials) return;
+        signalingManager.off('call-accept', handleAccept);
         signalingManager.off('call-reject', handleReject);
-        console.log(`✅ Callee accepted. Sending credentials to ${fromMac}`);
-        setCallState('connecting');
-        setStatusText('Sharing connection details...');
-
-        // Send WiFi credentials to callee
-        try {
-          await signalingManager.sendSignal(fromMac, {
-            type: 'call-accept',
-            from: myUUID!,
-            to: friendUUIDRef.current,
-            data: {
-              ssid: credentialsRef.current!.ssid,
-              passphrase: credentialsRef.current!.passphrase,
-              isCredentials: true,
-            }
-          });
-        } catch (e) {
-          console.error('❌ Failed to send credentials:', e);
-          endCall();
-        }
+        setCallState('connecting'); setStatusText('Connecting...');
+        await signalingManager.sendSignal(fromMac, {
+          type: 'call-accept', from: myUUID!, to: uuidRef.current,
+          data: { ssid: credRef.current!.ssid, passphrase: credRef.current!.passphrase, isCredentials: true }
+        });
       };
-
-      const handleRemoteEnd = ({ signal }: any) => {
-        if (signal.from !== friendUUIDRef.current) return;
-        cleanup();
-        setCallState('ended');
-        setStatusText('Call ended');
+      const handleEnd = ({ signal }: any) => {
+        if (signal.from !== uuidRef.current) return;
+        cleanup(); setCallState('ended'); setStatusText('Call ended');
         setTimeout(() => router.back(), 800);
       };
-
       signalingManager.on('call-reject', handleReject);
-      signalingManager.on('call-accept', handleAcceptAck);
-      signalingManager.on('call-end', handleRemoteEnd);
+      signalingManager.on('call-accept', handleAccept);
+      signalingManager.on('call-end', handleEnd);
 
-      // WiFi Direct audio socket ready
-      const audioReadySub = WifiDirect.onAudioReady(() => {
-        audioReadySub.remove();
-        setCallState('active');
-        setStatusText('Connected');
-        startAudio();
-      });
-
+      const audioSub = WifiDirect.onAudioReady(() => { audioSub.remove(); setCallState('active'); setStatusText('Connected'); startAudio(); });
       WifiDirect.onConnectionFailed(() => endCall());
 
-      // 4. Send call-request via BLE
-      setCallState('calling');
-      setStatusText(`Calling ${friendName}...`);
-      console.log(`📤 Sending call-request to UUID: ${friendUUIDRef.current} MAC: ${friendIdRef.current}`);
-
-      const sent = await signalingManager.sendCallRequest(
-        friendIdRef.current, friendUUIDRef.current, myDeviceName || 'Unknown'
-      );
-
-      if (!sent) {
-        Alert.alert('Call failed', 'Could not reach device. Make sure they are nearby and their app is open.');
-        cleanup(); router.back(); return;
-      }
-
-      setCallState('waiting');
-      setStatusText(`Waiting for ${friendName} to answer...`);
-
-    } catch (err: any) {
-      console.error('❌ Call error:', err);
-      Alert.alert('Call failed', err?.message || 'Unknown error');
-      cleanup(); router.back();
-    }
+      setCallState('calling'); setStatusText(`Calling ${friendName}...`);
+      const sent = await signalingManager.sendCallRequest(idRef.current, uuidRef.current, myDeviceName || 'Unknown');
+      if (!sent) { Alert.alert('Call failed', 'Could not reach device. Make sure their app is open.'); cleanup(); router.back(); return; }
+      setCallState('waiting'); setStatusText(`Waiting for ${friendName}...`);
+    } catch (e: any) { Alert.alert('Error', e?.message || 'Unknown error'); cleanup(); router.back(); }
   };
 
   const startAudio = () => {
-    AudioStream.startCapture((b64: string) => {
-      WifiDirect.sendAudio(b64).catch(() => {});
-    });
-    WifiDirect.onAudioReceived((e: any) => {
-      AudioStream.playback(e.data);
-    });
+    AudioStream.startCapture((b64: string) => { WifiDirect.sendAudio(b64).catch(() => {}); });
+    WifiDirect.onAudioReceived((e: any) => { AudioStream.playback(e.data); });
   };
 
   const endCall = async () => {
     if (cleanedUp.current) return;
-    setCallState('ended');
-    setStatusText('Call ended');
-    try {
-      await signalingManager.sendCallEnd(friendIdRef.current, friendUUIDRef.current);
-    } catch (e) {}
-    cleanup();
-    setTimeout(() => router.back(), 800);
+    setCallState('ended'); setStatusText('Call ended');
+    try { await signalingManager.sendCallEnd(idRef.current, uuidRef.current); } catch (e) {}
+    cleanup(); setTimeout(() => router.back(), 800);
   };
 
   const cleanup = () => {
     if (cleanedUp.current) return;
     cleanedUp.current = true;
-    AudioStream.stop();
-    WifiDirect.removeGroup();
-    WifiDirect.removeAllListeners();
+    AudioStream.stop(); WifiDirect.removeGroup(); WifiDirect.removeAllListeners();
     if (timerRef.current) clearInterval(timerRef.current);
   };
 
-  const fmt = (s: number) =>
-    `${Math.floor(s / 60).toString().padStart(2, '0')}:${(s % 60).toString().padStart(2, '0')}`;
+  const fmt = (s: number) => `${Math.floor(s / 60).toString().padStart(2, '0')}:${(s % 60).toString().padStart(2, '0')}`;
+
+  const stateConfig = {
+    'creating-group': { label: 'SETTING UP', color: '#F5C842' },
+    'calling':        { label: 'CALLING',     color: '#F5C842' },
+    'waiting':        { label: 'RINGING',     color: '#F5C842' },
+    'connecting':     { label: 'CONNECTING',  color: '#F5C842' },
+    'active':         { label: 'LIVE',        color: '#4ADE80' },
+    'ended':          { label: 'ENDED',       color: '#F87171' },
+  };
+  const cfg = stateConfig[callState];
 
   return (
-    <View style={styles.container}>
-      <View style={[styles.avatarRing, {
-        borderColor: callState === 'active' ? '#4CAF50' : callState === 'ended' ? '#f44336' : '#2196F3'
-      }]}>
-        <Text style={styles.avatar}>👤</Text>
+    <ImageBackground source={BG} style={styles.bg} resizeMode="cover">
+      <StatusBar barStyle="light-content" />
+      <View style={styles.overlay}>
+
+        {/* Status badge */}
+        <View style={styles.topArea}>
+          <View style={[styles.stateBadge, { borderColor: cfg.color + '44', backgroundColor: cfg.color + '15' }]}>
+            <View style={[styles.stateDot, { backgroundColor: cfg.color }]} />
+            <Text style={[styles.stateLabel, { color: cfg.color }]}>{cfg.label}</Text>
+          </View>
+        </View>
+
+        {/* Avatar */}
+        <View style={styles.centerArea}>
+          <View style={[styles.avatarRing, { borderColor: cfg.color + '55' }]}>
+            <View style={[styles.avatarInner, { backgroundColor: cfg.color + '20' }]}>
+              <Text style={styles.avatarLetter}>
+                {friendName ? friendName.charAt(0).toUpperCase() : '?'}
+              </Text>
+            </View>
+          </View>
+          <Text style={styles.name}>{friendName}</Text>
+          <Text style={styles.status}>{statusText}</Text>
+          {callState === 'active' && (
+            <View style={styles.timerBadge}>
+              <Text style={styles.timer}>{fmt(callDuration)}</Text>
+            </View>
+          )}
+        </View>
+
+        {/* End button */}
+        <View style={styles.bottomArea}>
+          <TouchableOpacity style={styles.endBtn} onPress={endCall} disabled={callState === 'ended'}>
+            <Text style={styles.endBtnIcon}>📵</Text>
+          </TouchableOpacity>
+          <Text style={styles.endBtnLabel}>End Call</Text>
+        </View>
+
       </View>
-      <Text style={styles.name}>{friendName}</Text>
-      <Text style={styles.status}>{statusText}</Text>
-      {callState === 'active' && <Text style={styles.duration}>{fmt(callDuration)}</Text>}
-      {callState !== 'active' && callState !== 'ended' && <Text style={styles.spinner}>⏳</Text>}
-      <TouchableOpacity style={styles.endBtn} onPress={endCall} disabled={callState === 'ended'}>
-        <Text style={styles.endBtnText}>📵</Text>
-      </TouchableOpacity>
-    </View>
+    </ImageBackground>
   );
 }
 
 const styles = StyleSheet.create({
-  container: { flex: 1, backgroundColor: '#1a1a2e', alignItems: 'center', justifyContent: 'center', padding: 40 },
-  avatarRing: { width: 120, height: 120, borderRadius: 60, backgroundColor: '#16213e', alignItems: 'center', justifyContent: 'center', marginBottom: 24, borderWidth: 3 },
-  avatar: { fontSize: 64 },
-  name: { fontSize: 32, fontWeight: 'bold', color: '#fff', marginBottom: 12 },
-  status: { fontSize: 18, color: '#aaa', marginBottom: 8, textAlign: 'center' },
-  duration: { fontSize: 24, color: '#4CAF50', fontFamily: 'monospace', marginBottom: 8 },
-  spinner: { fontSize: 32, marginBottom: 8 },
-  endBtn: { position: 'absolute', bottom: 80, width: 80, height: 80, borderRadius: 40, backgroundColor: '#f44336', alignItems: 'center', justifyContent: 'center', elevation: 4 },
-  endBtnText: { fontSize: 36 },
+  bg: { flex: 1 },
+  overlay: { flex: 1, backgroundColor: 'rgba(0,0,0,0.6)', alignItems: 'center', justifyContent: 'space-between', paddingTop: 80, paddingBottom: 80 },
+  topArea: { alignItems: 'center' },
+  stateBadge: { flexDirection: 'row', alignItems: 'center', gap: 8, borderWidth: 1, borderRadius: 20, paddingHorizontal: 16, paddingVertical: 8 },
+  stateDot: { width: 7, height: 7, borderRadius: 4 },
+  stateLabel: { fontSize: 12, fontWeight: '800', letterSpacing: 2 },
+  centerArea: { alignItems: 'center' },
+  avatarRing: { width: 150, height: 150, borderRadius: 75, borderWidth: 2, alignItems: 'center', justifyContent: 'center', marginBottom: 28 },
+  avatarInner: { width: 120, height: 120, borderRadius: 60, alignItems: 'center', justifyContent: 'center' },
+  avatarLetter: { fontSize: 56, fontWeight: '900', color: '#F5C842' },
+  name: { fontSize: 32, fontWeight: '900', color: '#fff', letterSpacing: -1, marginBottom: 10 },
+  status: { fontSize: 15, color: 'rgba(255,255,255,0.5)', fontWeight: '600', marginBottom: 20 },
+  timerBadge: { backgroundColor: 'rgba(74,222,128,0.12)', borderWidth: 1, borderColor: 'rgba(74,222,128,0.25)', borderRadius: 20, paddingHorizontal: 20, paddingVertical: 8 },
+  timer: { fontSize: 22, fontWeight: '800', color: '#4ADE80', fontVariant: ['tabular-nums'] },
+  bottomArea: { alignItems: 'center', gap: 12 },
+  endBtn: { width: 72, height: 72, borderRadius: 36, backgroundColor: '#F87171', alignItems: 'center', justifyContent: 'center', shadowColor: '#F87171', shadowOffset: { width: 0, height: 8 }, shadowOpacity: 0.5, shadowRadius: 16, elevation: 12 },
+  endBtnIcon: { fontSize: 30 },
+  endBtnLabel: { fontSize: 12, color: 'rgba(255,255,255,0.4)', fontWeight: '700' },
 });

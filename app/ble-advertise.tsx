@@ -1,319 +1,239 @@
 import React, { useEffect, useState } from 'react';
-import { Alert, Button, PermissionsAndroid, Platform, StyleSheet, Text, TextInput, View } from 'react-native';
+import {
+  Alert, ImageBackground, KeyboardAvoidingView,
+  PermissionsAndroid,
+  Platform,
+  ScrollView, StatusBar, StyleSheet,
+  Text, TextInput, TouchableOpacity, View
+} from 'react-native';
 import { BleManager } from 'react-native-ble-plx';
 import BlePeripheral from '../modules/BlePeripheral';
 import { useAppStore } from '../store/appStore';
 
+const BG = require('../assets/images/banana-bg.png');
 const KELA_SERVICE_UUID = '0000FE00-0000-1000-8000-00805F9B34FB';
 
 export default function BLEAdvertiseScreen() {
   const [bleManager] = useState(() => new BleManager());
   const [advertising, setAdvertisingLocal] = useState(false);
-  const [bluetoothState, setBluetoothState] = useState<string>('Unknown');
+  const [btState, setBtState] = useState('Unknown');
   const [deviceName, setDeviceName] = useState('');
-  const [error, setError] = useState<string>('');
+  const [error, setError] = useState('');
 
-  // Zustand store
-  const setAdvertising = useAppStore(state => state.setAdvertising);
-  const initIdentity = useAppStore(state => state.initIdentity);
-  const myStoredName = useAppStore(state => state.myDeviceName);
-  const myUUID = useAppStore(state => state.myUUID);
+  const setAdvertising = useAppStore(s => s.setAdvertising);
+  const initIdentity = useAppStore(s => s.initIdentity);
+  const myStoredName = useAppStore(s => s.myDeviceName);
+  const myUUID = useAppStore(s => s.myUUID);
 
-  // Load stored name on mount
   useEffect(() => {
-    if (myStoredName) {
-      setDeviceName(myStoredName);
-    }
+    if (myStoredName) setDeviceName(myStoredName);
   }, [myStoredName]);
 
   useEffect(() => {
-    // Monitor Bluetooth state
-    const subscription = bleManager.onStateChange((state) => {
-      setBluetoothState(state);
-    }, true);
-
-    // Listen for advertising events
-    const startedListener = BlePeripheral.addListener('onAdvertisingStarted', (event) => {
-      console.log('✅ Advertising started:', event);
-      setAdvertisingLocal(true);
-      setAdvertising(true);
-      setError('');
-    });
-
-    const failedListener = BlePeripheral.addListener('onAdvertisingFailed', (event) => {
-      console.error('❌ Advertising failed:', event);
-      setError(`Failed: ${event.error}`);
-      setAdvertisingLocal(false);
-      setAdvertising(false);
-    });
-
-    const stoppedListener = BlePeripheral.addListener('onAdvertisingStopped', (event) => {
-      console.log('⏹️ Advertising stopped:', event);
-      setAdvertisingLocal(false);
-      setAdvertising(false);
-    });
-
-    return () => {
-      subscription.remove();
-      startedListener.remove();
-      failedListener.remove();
-      stoppedListener.remove();
-    };
+    const sub = bleManager.onStateChange(s => setBtState(s), true);
+    const s1 = BlePeripheral.addListener('onAdvertisingStarted', () => { setAdvertisingLocal(true); setAdvertising(true); setError(''); });
+    const s2 = BlePeripheral.addListener('onAdvertisingFailed', (e: any) => { setError(e.error); setAdvertisingLocal(false); setAdvertising(false); });
+    const s3 = BlePeripheral.addListener('onAdvertisingStopped', () => { setAdvertisingLocal(false); setAdvertising(false); });
+    return () => { sub.remove(); s1.remove(); s2.remove(); s3.remove(); };
   }, []);
 
   const requestPermissions = async () => {
-    if (Platform.OS === 'android') {
-      if (Platform.Version >= 31) {
-        try {
-          const granted = await PermissionsAndroid.requestMultiple([
-            PermissionsAndroid.PERMISSIONS.BLUETOOTH_ADVERTISE,
-            PermissionsAndroid.PERMISSIONS.BLUETOOTH_CONNECT,
-            PermissionsAndroid.PERMISSIONS.ACCESS_FINE_LOCATION,
-          ]);
-
-          const allGranted = Object.values(granted).every(
-            (status) => status === PermissionsAndroid.RESULTS.GRANTED
-          );
-
-          if (!allGranted) {
-            setError('❌ Advertising permissions denied');
-            return false;
-          }
-          return true;
-        } catch (err) {
-          setError(`Permission error: ${err}`);
-          return false;
-        }
+    if (Platform.OS === 'android' && Platform.Version >= 31) {
+      const g = await PermissionsAndroid.requestMultiple([
+        PermissionsAndroid.PERMISSIONS.BLUETOOTH_ADVERTISE,
+        PermissionsAndroid.PERMISSIONS.BLUETOOTH_CONNECT,
+        PermissionsAndroid.PERMISSIONS.ACCESS_FINE_LOCATION,
+      ]);
+      if (!Object.values(g).every(s => s === PermissionsAndroid.RESULTS.GRANTED)) {
+        setError('Permissions denied'); return false;
       }
     }
     return true;
   };
 
-  const startAdvertisingHandler = async () => {
-    if (!deviceName.trim()) {
-      Alert.alert('Name Required', 'Please enter a device name to advertise');
-      return;
-    }
-
-    const state = await bleManager.state();
-    if (state !== 'PoweredOn') {
-      Alert.alert('Bluetooth Required', 'Please turn on Bluetooth and try again.');
-      return;
-    }
-
-    const hasPermissions = await requestPermissions();
-    if (!hasPermissions) return;
-
+  const startBroadcasting = async () => {
+    if (!deviceName.trim()) { Alert.alert('Name Required', 'Enter a name to broadcast.'); return; }
+    if ((await bleManager.state()) !== 'PoweredOn') { Alert.alert('Bluetooth Required', 'Turn on Bluetooth first.'); return; }
+    if (!(await requestPermissions())) return;
     try {
       setError('');
-      console.log(`📢 Starting to advertise as: ${deviceName}`);
-
-      // ✅ Init permanent UUID (generates once on first install, reuses forever)
-      await initIdentity(deviceName);
+      await initIdentity(deviceName.trim());
       const uuid = useAppStore.getState().myUUID!;
-
-      // ✅ Write UUID into GATT identity characteristic so peers can read it
-      BlePeripheral.setDeviceUUID(uuid, deviceName);
-
-      await BlePeripheral.startAdvertising(deviceName, KELA_SERVICE_UUID);
-
-      console.log(`🆔 Advertising as: ${deviceName} | UUID: ${uuid}`);
-
-      Alert.alert(
-        '✅ Broadcasting Started!',
-        `Your device "${deviceName}" is now visible to other Kela-Konnect devices!`,
-        [{ text: 'OK' }]
-      );
-
-    } catch (error: any) {
-      console.error('❌ Start advertising error:', error);
-      setError(error.message || 'Failed to start advertising');
-    }
+      BlePeripheral.setDeviceUUID(uuid, deviceName.trim());
+      await BlePeripheral.startAdvertising(deviceName.trim(), KELA_SERVICE_UUID);
+      console.log(`📢 Broadcasting as: ${deviceName} | UUID: ${uuid}`);
+    } catch (e: any) { setError(e.message || 'Failed to start'); }
   };
 
-  const stopAdvertising = async () => {
-    try {
-      await BlePeripheral.stopAdvertising();
-      Alert.alert('Broadcasting Stopped', 'Your device is no longer visible.');
-    } catch (error: any) {
-      console.error('Stop error:', error);
-      setError(error.message || 'Failed to stop advertising');
-    }
+  const stopBroadcasting = async () => {
+    try { await BlePeripheral.stopAdvertising(); } catch (e: any) { setError(e.message || 'Failed to stop'); }
   };
+
+  const btOn = btState === 'PoweredOn';
 
   return (
-    <View style={styles.container}>
-      <Text style={styles.title}>📢 BLE Advertiser</Text>
+    <ImageBackground source={BG} style={styles.bg} resizeMode="cover">
+      <StatusBar barStyle="light-content" />
+      <View style={styles.overlay}>
+        <KeyboardAvoidingView behavior={Platform.OS === 'ios' ? 'padding' : undefined} style={{ flex: 1 }}>
+          <ScrollView contentContainerStyle={styles.scroll} showsVerticalScrollIndicator={false} keyboardShouldPersistTaps="handled">
 
-      <View style={styles.statusContainer}>
-        <Text style={styles.statusLabel}>Bluetooth Status:</Text>
-        <Text style={[
-          styles.statusValue,
-          { color: bluetoothState === 'PoweredOn' ? '#4CAF50' : '#F44336' }
-        ]}>
-          {bluetoothState}
-        </Text>
+            {/* Header */}
+            <View style={styles.header}>
+              <Text style={styles.headerLabel}>KELA-KONNECT</Text>
+              <Text style={styles.headerTitle}>Broadcast</Text>
+              <Text style={styles.headerSub}>Make your device visible to nearby users</Text>
+            </View>
+
+            {/* Status card */}
+            <View style={[styles.statusCard, advertising && styles.statusCardOn]}>
+              <View style={styles.statusRow}>
+                <View style={[styles.statusDot, advertising ? styles.dotOn : styles.dotOff]} />
+                <Text style={styles.statusTitle}>
+                  {advertising ? 'Broadcasting' : 'Not Broadcasting'}
+                </Text>
+              </View>
+              {advertising && myUUID && (
+                <Text style={styles.statusSub}>
+                  Visible as: <Text style={styles.statusName}>{deviceName}</Text>
+                </Text>
+              )}
+              <View style={styles.btRow}>
+                <Text style={[styles.btText, btOn ? styles.btOn : styles.btOff]}>
+                  Bluetooth: {btOn ? 'ON ✓' : 'OFF ✗'}
+                </Text>
+              </View>
+            </View>
+
+            {/* Name input */}
+            <View style={styles.inputSection}>
+              <Text style={styles.inputLabel}>Your Display Name</Text>
+              <View style={styles.inputWrapper}>
+                <TextInput
+                  style={styles.input}
+                  placeholder="e.g. Umair's Phone"
+                  placeholderTextColor="rgba(255,255,255,0.25)"
+                  value={deviceName}
+                  onChangeText={setDeviceName}
+                  editable={!advertising}
+                  maxLength={32}
+                  autoCapitalize="words"
+                />
+              </View>
+              <Text style={styles.inputHint}>This name is visible to nearby Kela-Konnect users</Text>
+            </View>
+
+            {error ? (
+              <View style={styles.errorCard}>
+                <Text style={styles.errorText}>⚠️  {error}</Text>
+              </View>
+            ) : null}
+
+            {/* UUID info */}
+            {myUUID && (
+              <View style={styles.idCard}>
+                <Text style={styles.idLabel}>PERMANENT ID</Text>
+                <Text style={styles.idValue}>{myUUID.substring(0, 24)}...</Text>
+                <Text style={styles.idHint}>This never changes — it's your permanent identity</Text>
+              </View>
+            )}
+
+            {/* Buttons */}
+            <View style={styles.btnGroup}>
+              <TouchableOpacity
+                style={[styles.primaryBtn, (advertising || !btOn) && styles.btnDisabled]}
+                onPress={startBroadcasting}
+                disabled={advertising || !btOn}
+              >
+                <Text style={styles.primaryBtnText}>
+                  {advertising ? '📢  Broadcasting...' : '▶  Start Broadcasting'}
+                </Text>
+              </TouchableOpacity>
+
+              <TouchableOpacity
+                style={[styles.secondaryBtn, !advertising && styles.btnDisabled]}
+                onPress={stopBroadcasting}
+                disabled={!advertising}
+              >
+                <Text style={styles.secondaryBtnText}>⏹  Stop Broadcasting</Text>
+              </TouchableOpacity>
+            </View>
+
+            <View style={styles.tip}>
+              <Text style={styles.tipText}>
+                🍌  Keep broadcasting on while friends scan for you
+              </Text>
+            </View>
+
+          </ScrollView>
+        </KeyboardAvoidingView>
       </View>
-
-      {error ? <Text style={styles.error}>{error}</Text> : null}
-
-      <View style={styles.inputContainer}>
-        <Text style={styles.label}>Your Device Name:</Text>
-        <TextInput
-          style={styles.input}
-          placeholder="e.g., Umair's Phone"
-          value={deviceName}
-          onChangeText={setDeviceName}
-          editable={!advertising}
-        />
-        <Text style={styles.hint}>
-          This name will be visible to other Kela-Konnect users nearby
-        </Text>
-      </View>
-
-      <View style={[
-        styles.statusBox,
-        { backgroundColor: advertising ? '#E8F5E9' : '#FFF3E0', borderLeftColor: advertising ? '#4CAF50' : '#FF9800' }
-      ]}>
-        <Text style={styles.statusBoxTitle}>
-          {advertising ? '✅ Broadcasting' : '⏸️ Not Broadcasting'}
-        </Text>
-        {advertising && (
-          <Text style={styles.statusBoxText}>
-            Broadcasting as: <Text style={styles.bold}>{deviceName}</Text>
-          </Text>
-        )}
-      </View>
-
-      <View style={styles.buttonContainer}>
-        <Button
-          title={advertising ? "📢 Broadcasting..." : "▶️ Start Broadcasting"}
-          onPress={startAdvertisingHandler}
-          disabled={advertising || bluetoothState !== 'PoweredOn'}
-          color="#4CAF50"
-        />
-        <Button
-          title="⏹️ Stop Broadcasting"
-          onPress={stopAdvertising}
-          disabled={!advertising}
-          color="#F44336"
-        />
-      </View>
-
-      <View style={styles.infoBox}>
-        <Text style={styles.infoTitle}>✨ Native Implementation</Text>
-        <Text style={styles.infoText}>
-          Using custom Android native module for full BLE peripheral control.
-        </Text>
-      </View>
-    </View>
+    </ImageBackground>
   );
 }
 
 const styles = StyleSheet.create({
-  container: {
-    flex: 1,
-    padding: 20,
-    backgroundColor: '#f5f5f5',
+  bg: { flex: 1 },
+  overlay: { flex: 1, backgroundColor: 'rgba(0,0,0,0.42)' },
+  scroll: { paddingTop: 60, paddingHorizontal: 22, paddingBottom: 40 },
+
+  header: { marginBottom: 24 },
+  headerLabel: { fontSize: 10, fontWeight: '700', letterSpacing: 3, color: 'rgba(255,255,255,0.5)', marginBottom: 4 },
+  headerTitle: { fontSize: 34, fontWeight: '900', color: '#F5C842', letterSpacing: -1, marginBottom: 6 },
+  headerSub: { fontSize: 14, color: 'rgba(255,255,255,0.4)', fontWeight: '600' },
+
+  statusCard: {
+    backgroundColor: 'rgba(15,15,15,0.82)', borderWidth: 1, borderColor: 'rgba(255,255,255,0.07)',
+    borderRadius: 20, padding: 18, marginBottom: 20,
+    shadowColor: '#000', shadowOffset: { width: 0, height: 8 }, shadowOpacity: 0.4, shadowRadius: 16, elevation: 10,
   },
-  title: {
-    fontSize: 28,
-    fontWeight: 'bold',
-    marginBottom: 20,
-    marginTop: 40,
-    textAlign: 'center',
-    color: '#333',
+  statusCardOn: { borderColor: 'rgba(74,222,128,0.25)' },
+  statusRow: { flexDirection: 'row', alignItems: 'center', gap: 10, marginBottom: 8 },
+  statusDot: { width: 10, height: 10, borderRadius: 5 },
+  dotOn: { backgroundColor: '#4ADE80' },
+  dotOff: { backgroundColor: 'rgba(255,255,255,0.25)' },
+  statusTitle: { fontSize: 17, fontWeight: '800', color: '#fff' },
+  statusSub: { fontSize: 13, color: 'rgba(255,255,255,0.45)', fontWeight: '600', marginBottom: 10 },
+  statusName: { color: '#F5C842', fontWeight: '800' },
+  btRow: { marginTop: 4 },
+  btText: { fontSize: 12, fontWeight: '700' },
+  btOn: { color: '#4ADE80' },
+  btOff: { color: '#F87171' },
+
+  inputSection: { marginBottom: 20 },
+  inputLabel: { fontSize: 12, fontWeight: '800', color: 'rgba(255,255,255,0.6)', letterSpacing: 1.5, textTransform: 'uppercase', marginBottom: 10 },
+  inputWrapper: {
+    backgroundColor: 'rgba(15,15,15,0.82)', borderWidth: 1, borderColor: 'rgba(255,255,255,0.1)',
+    borderRadius: 16, paddingHorizontal: 16, paddingVertical: 14,
+    shadowColor: '#000', shadowOffset: { width: 0, height: 4 }, shadowOpacity: 0.3, shadowRadius: 8, elevation: 6,
   },
-  statusContainer: {
-    flexDirection: 'row',
-    justifyContent: 'center',
-    alignItems: 'center',
-    marginBottom: 20,
-    padding: 10,
-    backgroundColor: '#fff',
-    borderRadius: 8,
+  input: { fontSize: 16, fontWeight: '700', color: '#fff' },
+  inputHint: { fontSize: 11, color: 'rgba(255,255,255,0.3)', fontWeight: '600', marginTop: 8 },
+
+  errorCard: { backgroundColor: 'rgba(248,113,113,0.1)', borderWidth: 1, borderColor: 'rgba(248,113,113,0.25)', borderRadius: 14, padding: 14, marginBottom: 16 },
+  errorText: { fontSize: 13, color: '#F87171', fontWeight: '700' },
+
+  idCard: {
+    backgroundColor: 'rgba(245,200,66,0.06)', borderWidth: 1, borderColor: 'rgba(245,200,66,0.15)',
+    borderRadius: 16, padding: 16, marginBottom: 20,
   },
-  statusLabel: {
-    fontSize: 16,
-    marginRight: 10,
-    color: '#666',
+  idLabel: { fontSize: 9, fontWeight: '800', letterSpacing: 2, color: 'rgba(245,200,66,0.6)', marginBottom: 6, textTransform: 'uppercase' },
+  idValue: { fontSize: 13, color: 'rgba(245,200,66,0.85)', fontFamily: 'monospace', fontWeight: '700', marginBottom: 4 },
+  idHint: { fontSize: 11, color: 'rgba(255,255,255,0.3)', fontWeight: '600' },
+
+  btnGroup: { gap: 12, marginBottom: 20 },
+  primaryBtn: {
+    backgroundColor: '#F5C842', borderRadius: 16, paddingVertical: 16, alignItems: 'center',
+    shadowColor: '#F5C842', shadowOffset: { width: 0, height: 4 }, shadowOpacity: 0.4, shadowRadius: 12, elevation: 8,
   },
-  statusValue: {
-    fontSize: 16,
-    fontWeight: 'bold',
+  primaryBtnText: { fontSize: 15, fontWeight: '900', color: '#1a1a1a' },
+  secondaryBtn: {
+    backgroundColor: 'rgba(248,113,113,0.12)', borderWidth: 1, borderColor: 'rgba(248,113,113,0.25)',
+    borderRadius: 16, paddingVertical: 16, alignItems: 'center',
   },
-  error: {
-    color: '#F44336',
-    marginBottom: 15,
-    padding: 10,
-    backgroundColor: '#FFEBEE',
-    borderRadius: 8,
-    fontSize: 14,
-  },
-  inputContainer: {
-    marginBottom: 20,
-  },
-  label: {
-    fontSize: 16,
-    fontWeight: '600',
-    marginBottom: 8,
-    color: '#333',
-  },
-  input: {
-    backgroundColor: '#fff',
-    borderWidth: 1,
-    borderColor: '#ddd',
-    borderRadius: 8,
-    padding: 12,
-    fontSize: 16,
-  },
-  hint: {
-    fontSize: 12,
-    color: '#999',
-    marginTop: 4,
-  },
-  statusBox: {
-    padding: 15,
-    borderRadius: 8,
-    marginBottom: 20,
-    borderLeftWidth: 4,
-  },
-  statusBoxTitle: {
-    fontSize: 18,
-    fontWeight: 'bold',
-    color: '#333',
-    marginBottom: 8,
-  },
-  statusBoxText: {
-    fontSize: 14,
-    color: '#666',
-    lineHeight: 20,
-  },
-  bold: {
-    fontWeight: 'bold',
-    color: '#333',
-  },
-  buttonContainer: {
-    flexDirection: 'row',
-    justifyContent: 'space-around',
-    marginBottom: 20,
-  },
-  infoBox: {
-    backgroundColor: '#E8EAF6',
-    padding: 15,
-    borderRadius: 8,
-    borderLeftWidth: 4,
-    borderLeftColor: '#3F51B5',
-  },
-  infoTitle: {
-    fontSize: 16,
-    fontWeight: 'bold',
-    color: '#333',
-    marginBottom: 8,
-  },
-  infoText: {
-    fontSize: 14,
-    color: '#666',
-    lineHeight: 22,
-  },
+  secondaryBtnText: { fontSize: 15, fontWeight: '800', color: '#F87171' },
+  btnDisabled: { opacity: 0.35 },
+
+  tip: { backgroundColor: 'rgba(245,200,66,0.08)', borderWidth: 1, borderColor: 'rgba(245,200,66,0.12)', borderRadius: 14, padding: 14, alignItems: 'center' },
+  tipText: { fontSize: 12, color: 'rgba(245,200,66,0.65)', fontWeight: '600', textAlign: 'center' },
 });

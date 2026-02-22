@@ -1,7 +1,12 @@
 import { router } from 'expo-router';
 import React, { useEffect } from 'react';
-import { Alert, FlatList, StyleSheet, Text, TouchableOpacity, View } from 'react-native';
+import {
+  Alert, FlatList, ImageBackground, StatusBar,
+  StyleSheet, Text, TouchableOpacity, View
+} from 'react-native';
 import { useAppStore } from '../store/appStore';
+
+const BG = require('../assets/images/banana-bg.png');
 
 export default function FriendsScreen() {
   const friends = useAppStore(state => state.friends);
@@ -9,122 +14,218 @@ export default function FriendsScreen() {
   const loadData = useAppStore(state => state.loadData);
   const getCurrentMac = useAppStore(state => state.getCurrentMac);
 
-  useEffect(() => {
-    loadData();
-  }, []);
+  useEffect(() => { loadData(); }, []);
 
-  const handleRemove = async (uuid: string) => {
-    const friend = friends.find(f => f.uuid === uuid);
-    if (!friend) return;
-    Alert.alert(
-      'Remove Friend?',
-      `Remove ${friend.name}?`,
-      [
-        { text: 'Cancel', style: 'cancel' },
-        { text: 'Remove', style: 'destructive', onPress: () => removeFriend(uuid) }
-      ]
-    );
+  const nearby = friends.filter(f => !!f.currentMac);
+  const offline = friends.filter(f => !f.currentMac);
+
+  const handleRemove = (uuid: string) => {
+    const f = friends.find(f => f.uuid === uuid);
+    if (!f) return;
+    Alert.alert('Remove Friend', `Remove ${f.name} from your friends?`, [
+      { text: 'Cancel', style: 'cancel' },
+      { text: 'Remove', style: 'destructive', onPress: () => removeFriend(uuid) },
+    ]);
   };
 
   const handleCall = (item: any) => {
-    const latestMac = getCurrentMac(item.uuid) || item.currentMac;
-    if (!latestMac) {
-      Alert.alert(
-        '⚠️ Device Not Seen Recently',
-        `Scan for nearby users first to find ${item.name}.`
-      );
+    const mac = getCurrentMac(item.uuid) || item.currentMac;
+    if (!mac) {
+      Alert.alert('Not Nearby', `Scan for nearby users to find ${item.name} first.`);
       return;
     }
-    console.log(`📞 Calling ${item.name} | UUID: ${item.uuid} | MAC: ${latestMac}`);
-    router.push({
-      pathname: '/call',
-      params: { friendId: latestMac, friendName: item.name, friendUUID: item.uuid },
-    });
+    router.push({ pathname: '/call', params: { friendId: mac, friendName: item.name, friendUUID: item.uuid } });
   };
 
-  return (
-    <View style={styles.container}>
-      <Text style={styles.title}>👥 Friends</Text>
-
-      <TouchableOpacity style={styles.qrButton} onPress={() => router.push('/qr-code')}>
-        <Text style={styles.qrButtonText}>📷 Add Friend via QR Code</Text>
-      </TouchableOpacity>
-
-      <TouchableOpacity style={styles.scanButton} onPress={() => router.push('/ble-test')}>
-        <Text style={styles.scanButtonText}>🔍 Scan for Nearby Users</Text>
-      </TouchableOpacity>
-
-      <Text style={styles.subtitle}>Your Friends ({friends.length}):</Text>
-
-      <FlatList
-        data={friends}
-        keyExtractor={(item) => item.uuid}
-        renderItem={({ item }) => (
-          <View style={styles.friendItem}>
-            <View style={styles.friendInfo}>
-              <Text style={styles.friendName}>👤 {item.name}</Text>
-              <Text style={styles.friendId}>
-                {item.currentMac
-                  ? `MAC: ${item.currentMac}`
-                  : `UUID: ${item.uuid.substring(0, 8)}...`}
-              </Text>
-              <Text style={styles.friendDate}>
-                Added: {new Date(item.addedDate).toLocaleDateString()}
-              </Text>
-            </View>
-            <View style={styles.friendActions}>
-              <TouchableOpacity style={styles.callButton} onPress={() => handleCall(item)}>
-                <Text style={styles.callButtonText}>📞</Text>
-              </TouchableOpacity>
-              <TouchableOpacity style={styles.removeButton} onPress={() => handleRemove(item.uuid)}>
-                <Text style={styles.removeButtonText}>🗑️</Text>
-              </TouchableOpacity>
-            </View>
-          </View>
-        )}
-        ListEmptyComponent={
-          <View style={styles.emptyContainer}>
-            <Text style={styles.emptyIcon}>👥</Text>
-            <Text style={styles.emptyText}>
-              No friends yet!{'\n\n'}
-              Scan a friend's QR code to add them.
-            </Text>
-          </View>
-        }
-        style={styles.list}
-      />
-
-      <View style={styles.infoBox}>
-        <Text style={styles.infoText}>
-          💡 Add friends via QR code → Scan nearby → Call!
+  const FriendRow = ({ item, isNearby }: any) => (
+    <View style={[styles.card, !isNearby && styles.cardDim]}>
+      <View style={styles.avatar}>
+        <Text style={styles.avatarText}>
+          {item.name.charAt(0).toUpperCase()}
         </Text>
       </View>
+      <View style={styles.cardInfo}>
+        <Text style={styles.cardName}>{item.name}</Text>
+        <Text style={[styles.cardStatus, isNearby ? styles.statusOnline : styles.statusOffline]}>
+          {isNearby ? '● Nearby' : '○ Not seen yet'}
+        </Text>
+      </View>
+      <View style={styles.cardActions}>
+        {isNearby && (
+          <TouchableOpacity style={styles.callBtn} onPress={() => handleCall(item)}>
+            <Text style={styles.callBtnIcon}>📞</Text>
+          </TouchableOpacity>
+        )}
+        <TouchableOpacity style={styles.removeBtn} onPress={() => handleRemove(item.uuid)}>
+          <Text style={styles.removeBtnIcon}>✕</Text>
+        </TouchableOpacity>
+      </View>
     </View>
+  );
+
+  return (
+    <ImageBackground source={BG} style={styles.bg} resizeMode="cover">
+      <StatusBar barStyle="light-content" />
+      <View style={styles.overlay}>
+
+        {/* Header */}
+        <View style={styles.header}>
+          <View>
+            <Text style={styles.headerLabel}>KELA-KONNECT</Text>
+            <Text style={styles.headerTitle}>Friends</Text>
+          </View>
+          <TouchableOpacity style={styles.headerBtn} onPress={() => router.push('/qr-code')}>
+            <Text style={styles.headerBtnIcon}>📷</Text>
+          </TouchableOpacity>
+        </View>
+
+        {/* Action Buttons */}
+        <View style={styles.actionRow}>
+          <TouchableOpacity style={styles.primaryBtn} onPress={() => router.push('/ble-test')}>
+            <Text style={styles.primaryBtnText}>📡  Scan Nearby</Text>
+          </TouchableOpacity>
+          <TouchableOpacity style={styles.secondaryBtn} onPress={() => router.push('/qr-scanner')}>
+            <Text style={styles.secondaryBtnText}>+ Add Friend</Text>
+          </TouchableOpacity>
+        </View>
+
+        {/* Friends count badge */}
+        {friends.length > 0 && (
+          <View style={styles.countRow}>
+            <View style={styles.countBadge}>
+              <Text style={styles.countText}>{friends.length} friends</Text>
+            </View>
+            {nearby.length > 0 && (
+              <View style={[styles.countBadge, styles.countBadgeOnline]}>
+                <Text style={[styles.countText, { color: '#4ADE80' }]}>● {nearby.length} nearby</Text>
+              </View>
+            )}
+          </View>
+        )}
+
+        {/* List */}
+        <FlatList
+          data={[...nearby, ...offline]}
+          keyExtractor={i => i.uuid}
+          renderItem={({ item }) => (
+            <FriendRow item={item} isNearby={!!getCurrentMac(item.uuid) || !!item.currentMac} />
+          )}
+          ListEmptyComponent={
+            <View style={styles.empty}>
+              <Text style={styles.emptyIcon}>🍌</Text>
+              <Text style={styles.emptyTitle}>No friends yet</Text>
+              <Text style={styles.emptyText}>Tap + Add Friend to scan a QR code{'\n'}and add your first contact.</Text>
+            </View>
+          }
+          contentContainerStyle={styles.listContent}
+          style={styles.list}
+          showsVerticalScrollIndicator={false}
+        />
+
+        {/* Tip bar */}
+        <View style={styles.tip}>
+          <Text style={styles.tipText}>💡 Add friends via QR → Scan nearby → Call</Text>
+        </View>
+
+      </View>
+    </ImageBackground>
   );
 }
 
 const styles = StyleSheet.create({
-  container: { flex: 1, padding: 20, backgroundColor: '#f5f5f5' },
-  title: { fontSize: 28, fontWeight: 'bold', marginTop: 40, marginBottom: 20, textAlign: 'center', color: '#333' },
-  qrButton: { backgroundColor: '#4CAF50', padding: 18, borderRadius: 12, marginBottom: 12, elevation: 2 },
-  qrButtonText: { color: '#fff', fontSize: 18, fontWeight: 'bold', textAlign: 'center' },
-  scanButton: { backgroundColor: '#2196F3', padding: 18, borderRadius: 12, marginBottom: 24, elevation: 2 },
-  scanButtonText: { color: '#fff', fontSize: 18, fontWeight: 'bold', textAlign: 'center' },
-  subtitle: { fontSize: 18, fontWeight: '600', marginBottom: 10, color: '#333' },
+  bg: { flex: 1 },
+  overlay: { flex: 1, backgroundColor: 'rgba(0,0,0,0.38)' },
+
+  header: {
+    flexDirection: 'row', alignItems: 'flex-end', justifyContent: 'space-between',
+    paddingTop: 60, paddingHorizontal: 22, paddingBottom: 18,
+  },
+  headerLabel: { fontSize: 10, fontWeight: '700', letterSpacing: 3, color: 'rgba(255,255,255,0.5)', marginBottom: 4 },
+  headerTitle: { fontSize: 34, fontWeight: '900', color: '#F5C842', letterSpacing: -1 },
+  headerBtn: {
+    width: 44, height: 44, borderRadius: 14,
+    backgroundColor: 'rgba(245,200,66,0.15)',
+    borderWidth: 1, borderColor: 'rgba(245,200,66,0.3)',
+    alignItems: 'center', justifyContent: 'center',
+  },
+  headerBtnIcon: { fontSize: 20 },
+
+  actionRow: { flexDirection: 'row', gap: 10, paddingHorizontal: 22, marginBottom: 16 },
+  primaryBtn: {
+    flex: 1, backgroundColor: '#F5C842', borderRadius: 14,
+    paddingVertical: 13, alignItems: 'center',
+    shadowColor: '#F5C842', shadowOffset: { width: 0, height: 4 },
+    shadowOpacity: 0.4, shadowRadius: 12, elevation: 8,
+  },
+  primaryBtnText: { fontSize: 14, fontWeight: '800', color: '#1a1a1a' },
+  secondaryBtn: {
+    flex: 1, backgroundColor: 'rgba(20,20,20,0.78)',
+    borderWidth: 1, borderColor: 'rgba(255,255,255,0.12)',
+    borderRadius: 14, paddingVertical: 13, alignItems: 'center',
+  },
+  secondaryBtnText: { fontSize: 14, fontWeight: '800', color: '#fff' },
+
+  countRow: { flexDirection: 'row', gap: 8, paddingHorizontal: 22, marginBottom: 14 },
+  countBadge: {
+    backgroundColor: 'rgba(255,255,255,0.08)', borderRadius: 20,
+    paddingHorizontal: 12, paddingVertical: 5,
+    borderWidth: 1, borderColor: 'rgba(255,255,255,0.08)',
+  },
+  countBadgeOnline: { backgroundColor: 'rgba(74,222,128,0.08)', borderColor: 'rgba(74,222,128,0.2)' },
+  countText: { fontSize: 11, fontWeight: '700', color: 'rgba(255,255,255,0.6)', letterSpacing: 0.5 },
+
   list: { flex: 1 },
-  friendItem: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', backgroundColor: '#fff', padding: 15, borderRadius: 12, marginBottom: 10, borderLeftWidth: 4, borderLeftColor: '#4CAF50', elevation: 2 },
-  friendInfo: { flex: 1 },
-  friendName: { fontSize: 18, fontWeight: 'bold', color: '#333', marginBottom: 4 },
-  friendId: { fontSize: 11, color: '#999', marginBottom: 2, fontFamily: 'monospace' },
-  friendDate: { fontSize: 11, color: '#bbb' },
-  friendActions: { flexDirection: 'row', alignItems: 'center', gap: 10 },
-  callButton: { width: 50, height: 50, borderRadius: 25, backgroundColor: '#4CAF50', justifyContent: 'center', alignItems: 'center', elevation: 2 },
-  callButtonText: { fontSize: 24 },
-  removeButton: { width: 50, height: 50, justifyContent: 'center', alignItems: 'center' },
-  removeButtonText: { fontSize: 24 },
-  emptyContainer: { alignItems: 'center', marginTop: 60 },
-  emptyIcon: { fontSize: 64, marginBottom: 20 },
-  emptyText: { textAlign: 'center', color: '#999', fontSize: 16, lineHeight: 24 },
-  infoBox: { backgroundColor: '#E3F2FD', padding: 12, borderRadius: 8, marginTop: 10 },
-  infoText: { fontSize: 14, color: '#666', textAlign: 'center' },
+  listContent: { paddingHorizontal: 16, paddingBottom: 16 },
+
+  card: {
+    flexDirection: 'row', alignItems: 'center', gap: 14,
+    backgroundColor: 'rgba(15,15,15,0.82)',
+    borderWidth: 1, borderColor: 'rgba(255,255,255,0.07)',
+    borderRadius: 20, padding: 14, marginBottom: 10,
+    shadowColor: '#000', shadowOffset: { width: 0, height: 8 },
+    shadowOpacity: 0.4, shadowRadius: 16, elevation: 12,
+  },
+  cardDim: { opacity: 0.55 },
+
+  avatar: {
+    width: 48, height: 48, borderRadius: 16,
+    backgroundColor: '#F5C842',
+    alignItems: 'center', justifyContent: 'center', flexShrink: 0,
+  },
+  avatarText: { fontSize: 22, fontWeight: '900', color: '#1a1a1a' },
+
+  cardInfo: { flex: 1 },
+  cardName: { fontSize: 15, fontWeight: '800', color: '#fff', marginBottom: 3 },
+  cardStatus: { fontSize: 11, fontWeight: '700' },
+  statusOnline: { color: '#4ADE80' },
+  statusOffline: { color: 'rgba(255,255,255,0.3)' },
+
+  cardActions: { flexDirection: 'row', gap: 8, alignItems: 'center' },
+  callBtn: {
+    width: 40, height: 40, borderRadius: 13,
+    backgroundColor: '#F5C842',
+    alignItems: 'center', justifyContent: 'center',
+    shadowColor: '#F5C842', shadowOffset: { width: 0, height: 4 },
+    shadowOpacity: 0.4, shadowRadius: 8, elevation: 6,
+  },
+  callBtnIcon: { fontSize: 17 },
+  removeBtn: {
+    width: 34, height: 34, borderRadius: 11,
+    backgroundColor: 'rgba(248,113,113,0.12)',
+    borderWidth: 1, borderColor: 'rgba(248,113,113,0.2)',
+    alignItems: 'center', justifyContent: 'center',
+  },
+  removeBtnIcon: { fontSize: 12, color: '#F87171', fontWeight: '800' },
+
+  empty: { alignItems: 'center', paddingTop: 60, paddingHorizontal: 40 },
+  emptyIcon: { fontSize: 64, marginBottom: 16 },
+  emptyTitle: { fontSize: 22, fontWeight: '900', color: '#fff', marginBottom: 10 },
+  emptyText: { fontSize: 14, color: 'rgba(255,255,255,0.45)', textAlign: 'center', lineHeight: 22 },
+
+  tip: {
+    backgroundColor: 'rgba(245,200,66,0.08)',
+    borderTopWidth: 1, borderTopColor: 'rgba(245,200,66,0.12)',
+    padding: 14, alignItems: 'center',
+  },
+  tipText: { fontSize: 12, color: 'rgba(245,200,66,0.7)', fontWeight: '600' },
 });
