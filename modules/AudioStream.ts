@@ -1,14 +1,3 @@
-/**
- * AudioStream.ts
- * 
- * JS-side audio bridge.
- * Capture: mic → base64 PCM → callback (which sends via WifiDirect.sendAudio)
- * Playback: base64 PCM received → AudioStreamNative.play()
- * 
- * The actual PCM capture and playback is handled in AudioStreamModule.kt (to be built).
- * This file is the JS bridge.
- */
-
 import { NativeEventEmitter, NativeModules } from 'react-native';
 
 const Native = NativeModules.AudioStreamModule
@@ -20,42 +9,51 @@ const Native = NativeModules.AudioStreamModule
 const emitter = new NativeEventEmitter(Native);
 
 let captureSubscription: any = null;
-let playbackSubscription: any = null;
 
 const AudioStream = {
-  /**
-   * Start capturing microphone audio.
-   * onData called with base64-encoded PCM chunk every ~20ms.
-   */
+
+  /** Start mic capture. onData called with base64 PCM every ~20ms. */
   startCapture(onData: (base64Pcm: string) => void) {
     Native.startCapture();
-    captureSubscription = emitter.addListener('onAudioCaptured', (event: { data: string }) => {
-      onData(event.data);
+    captureSubscription = emitter.addListener('onAudioCaptured', (e: { data: string }) => {
+      onData(e.data);
     });
     console.log('🎙️ AudioStream: capture started');
   },
 
-  /**
-   * Play back received audio bytes (base64 PCM).
-   */
+  /** Play received base64 PCM audio */
   playback(base64Pcm: string) {
     Native.playback(base64Pcm);
   },
 
-  /**
-   * Stop all audio capture and playback.
-   */
+  /** Stop capture and playback */
   stop() {
-    try { Native.stopCapture(); } catch (e) {}
+    try { Native.stopCapture(); } catch (_) {}
     captureSubscription?.remove();
-    playbackSubscription?.remove();
     captureSubscription = null;
-    playbackSubscription = null;
     console.log('🛑 AudioStream: stopped');
   },
 
-  addListener: (eventName: string) => {},
-  removeListeners: (count: number) => {},
+  /** Mute/unmute mic (capture continues, data is dropped in native layer) */
+  setMuted(muted: boolean) {
+    Native.setMuted(muted);
+  },
+
+  isMuted(): Promise<boolean> {
+    return Native.isMuted();
+  },
+
+  /** Toggle speaker vs earpiece */
+  setSpeakerOn(speakerOn: boolean) {
+    Native.setSpeakerOn(speakerOn);
+  },
+
+  isSpeakerOn(): Promise<boolean> {
+    return Native.isSpeakerOn();
+  },
+
+  addListener: (_: string) => {},
+  removeListeners: (_: number) => {},
 };
 
 export default AudioStream;
