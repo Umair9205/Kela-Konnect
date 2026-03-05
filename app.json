@@ -8,13 +8,13 @@
     "scheme": "exp+kela-konnect",
     "userInterfaceStyle": "dark",
     "splash": {
-      "image": "./assets/images/splash.png",
+      "image": "./assets/images/splash-icon.png",
       "resizeMode": "contain",
       "backgroundColor": "#1a1a1a"
     },
     "android": {
       "adaptiveIcon": {
-        "foregroundImage": "./assets/images/adaptive-icon.png",
+        "foregroundImage": "./assets/images/android-icon-foreground.png",
         "backgroundColor": "#1a1a1a"
       },
       "package": "com.anonymous.kelakonnect",
