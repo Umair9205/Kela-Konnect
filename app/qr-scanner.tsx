@@ -1,126 +1,102 @@
-import { Camera, CameraView } from 'expo-camera';
+/**
+ * qr-scanner.tsx — Scan a friend's QR code to add them (FR-4)
+ * Uses expo-camera (bundled with Expo) for reliable QR scanning
+ */
+import { CameraView, useCameraPermissions } from 'expo-camera';
 import { router } from 'expo-router';
-import React, { useEffect, useState } from 'react';
-import { Alert, StatusBar, StyleSheet, Text, TouchableOpacity, View } from 'react-native';
+import { useRef, useState } from 'react';
+import { Alert, StyleSheet, Text, TouchableOpacity, View } from 'react-native';
 import { useAppStore } from '../store/appStore';
 
 export default function QRScannerScreen() {
-  const [hasPermission, setHasPermission] = useState<boolean | null>(null);
+  const [permission, requestPermission] = useCameraPermissions();
   const [scanned, setScanned] = useState(false);
   const addFriend = useAppStore(s => s.addFriend);
-  const isFriendByUUID = useAppStore(s => s.isFriendByUUID);
+  const isFriend  = useAppStore(s => s.isFriendByUUID);
+  const scanLock  = useRef(false);
 
-  useEffect(() => {
-    (async () => {
-      const { status } = await Camera.requestCameraPermissionsAsync();
-      setHasPermission(status === 'granted');
-    })();
-  }, []);
-
-  const handleBarCodeScanned = async ({ data }: { data: string }) => {
-    if (scanned) return;
+  const handleBarcode = ({ data }: { data: string }) => {
+    if (scanLock.current) return;
+    scanLock.current = true;
     setScanned(true);
     try {
       const parsed = JSON.parse(data);
-      if (parsed.app !== 'kela-konnect' || !parsed.uuid || !parsed.name) {
-        Alert.alert('Invalid QR', 'This is not a Kela-Konnect QR code.', [{ text: 'OK', onPress: () => setScanned(false) }]);
-        return;
+      if (!parsed.uuid || !parsed.name) throw new Error('Invalid QR');
+      if (isFriend(parsed.uuid)) {
+        Alert.alert('Already a friend', `${parsed.name} is already in your contacts.`, [
+          { text:'OK', onPress:()=>router.back() }
+        ]);
+      } else {
+        Alert.alert(`Add ${parsed.name}?`, 'They will be added to your friends list.', [
+          { text:'Cancel', style:'cancel', onPress:() => { setScanned(false); scanLock.current = false; } },
+          { text:'Add Friend', onPress: async () => {
+            await addFriend({ uuid: parsed.uuid, name: parsed.name, currentMac: '' });
+            Alert.alert('Added!', `${parsed.name} is now your friend.`, [{ text:'OK', onPress:()=>router.back() }]);
+          }},
+        ]);
       }
-      if (isFriendByUUID(parsed.uuid)) {
-        Alert.alert('Already Friends', `${parsed.name} is already in your friends list.`, [{ text: 'OK', onPress: () => router.back() }]);
-        return;
-      }
-      await addFriend({ uuid: parsed.uuid, name: parsed.name, currentMac: '', addedDate: new Date() });
-      Alert.alert('🍌 Friend Added!', `${parsed.name} has been added.\n\nScan nearby to call them!`, [{ text: 'OK', onPress: () => router.back() }]);
-    } catch (e) {
-      Alert.alert('Error', 'Could not read QR code.', [{ text: 'Try Again', onPress: () => setScanned(false) }]);
+    } catch (_) {
+      Alert.alert('Invalid QR', 'This is not a valid Kela-Konnect QR code.', [
+        { text:'Retry', onPress:() => { setScanned(false); scanLock.current = false; } }
+      ]);
     }
   };
 
-  if (hasPermission === null) return (
-    <View style={styles.center}>
-      <Text style={styles.statusText}>Requesting camera...</Text>
-    </View>
-  );
+  if (!permission) return <View style={s.center}><Text style={s.txt}>Requesting camera...</Text></View>;
 
-  if (hasPermission === false) return (
-    <View style={styles.center}>
-      <Text style={styles.icon}>📷</Text>
-      <Text style={styles.errorTitle}>Camera access denied</Text>
-      <Text style={styles.errorText}>Enable camera permissions in Settings to scan QR codes.</Text>
-    </View>
-  );
+  if (!permission.granted) {
+    return (
+      <View style={[s.center, s.dark]}>
+        <Text style={s.txt}>Camera permission needed to scan QR codes</Text>
+        <TouchableOpacity style={s.btn} onPress={requestPermission}>
+          <Text style={s.btnTxt}>Grant Permission</Text>
+        </TouchableOpacity>
+        <TouchableOpacity style={s.cancel} onPress={() => router.back()}>
+          <Text style={s.cancelTxt}>Cancel</Text>
+        </TouchableOpacity>
+      </View>
+    );
+  }
 
   return (
-    <View style={styles.container}>
-      <StatusBar barStyle="light-content" />
+    <View style={s.full}>
       <CameraView
-        style={StyleSheet.absoluteFill}
+        style={s.full}
+        facing="back"
+        onBarcodeScanned={scanned ? undefined : handleBarcode}
         barcodeScannerSettings={{ barcodeTypes: ['qr'] }}
-        onBarcodeScanned={scanned ? undefined : handleBarCodeScanned}
       />
-
-      {/* Top overlay */}
-      <View style={styles.topOverlay}>
-        <TouchableOpacity style={styles.backBtn} onPress={() => router.back()}>
-          <Text style={styles.backBtnText}>✕</Text>
+      <View style={s.ui}>
+        <TouchableOpacity onPress={() => router.back()} style={s.backBtn}>
+          <Text style={s.backTxt}>✕  Cancel</Text>
         </TouchableOpacity>
-        <Text style={styles.topTitle}>Scan QR Code</Text>
-        <Text style={styles.topSub}>Point at a friend's Kela-Konnect code</Text>
-      </View>
-
-      {/* Middle row */}
-      <View style={styles.middleRow}>
-        <View style={styles.sideOverlay} />
-        <View style={styles.scanFrame}>
-          {/* Corners */}
-          <View style={[styles.corner, styles.tl]} />
-          <View style={[styles.corner, styles.tr]} />
-          <View style={[styles.corner, styles.bl]} />
-          <View style={[styles.corner, styles.br]} />
+        <View style={s.finder}>
+          <View style={[s.corner,s.tl]} /><View style={[s.corner,s.tr]} />
+          <View style={[s.corner,s.bl]} /><View style={[s.corner,s.br]} />
         </View>
-        <View style={styles.sideOverlay} />
-      </View>
-
-      {/* Bottom overlay */}
-      <View style={styles.bottomOverlay}>
-        {scanned ? (
-          <TouchableOpacity style={styles.retryBtn} onPress={() => setScanned(false)}>
-            <Text style={styles.retryBtnText}>Tap to Scan Again</Text>
-          </TouchableOpacity>
-        ) : (
-          <Text style={styles.bottomHint}>🍌  Align the QR code within the frame</Text>
-        )}
+        <Text style={s.hint}>Point at a friend's QR code</Text>
       </View>
     </View>
   );
 }
 
-const FRAME = 260;
-const CORNER = 32;
-
-const styles = StyleSheet.create({
-  container: { flex: 1, backgroundColor: '#000' },
-  center: { flex: 1, backgroundColor: '#0a0a0a', alignItems: 'center', justifyContent: 'center', padding: 40 },
-  statusText: { color: 'rgba(255,255,255,0.5)', fontSize: 15 },
-  icon: { fontSize: 56, marginBottom: 16 },
-  errorTitle: { fontSize: 22, fontWeight: '900', color: '#fff', marginBottom: 10 },
-  errorText: { fontSize: 14, color: 'rgba(255,255,255,0.4)', textAlign: 'center', lineHeight: 22 },
-  topOverlay: { backgroundColor: 'rgba(0,0,0,0.65)', paddingTop: 56, paddingBottom: 24, paddingHorizontal: 24, alignItems: 'center' },
-  backBtn: { position: 'absolute', top: 56, right: 22, width: 38, height: 38, borderRadius: 19, backgroundColor: 'rgba(255,255,255,0.1)', alignItems: 'center', justifyContent: 'center' },
-  backBtnText: { fontSize: 15, color: '#fff', fontWeight: '700' },
-  topTitle: { fontSize: 22, fontWeight: '900', color: '#F5C842', letterSpacing: -0.5 },
-  topSub: { fontSize: 13, color: 'rgba(255,255,255,0.45)', marginTop: 6, fontWeight: '600' },
-  middleRow: { flexDirection: 'row', height: FRAME },
-  sideOverlay: { flex: 1, backgroundColor: 'rgba(0,0,0,0.65)' },
-  scanFrame: { width: FRAME, height: FRAME, position: 'relative' },
-  corner: { position: 'absolute', width: CORNER, height: CORNER, borderColor: '#F5C842', borderWidth: 3 },
-  tl: { top: 0, left: 0, borderRightWidth: 0, borderBottomWidth: 0, borderTopLeftRadius: 8 },
-  tr: { top: 0, right: 0, borderLeftWidth: 0, borderBottomWidth: 0, borderTopRightRadius: 8 },
-  bl: { bottom: 0, left: 0, borderRightWidth: 0, borderTopWidth: 0, borderBottomLeftRadius: 8 },
-  br: { bottom: 0, right: 0, borderLeftWidth: 0, borderTopWidth: 0, borderBottomRightRadius: 8 },
-  bottomOverlay: { flex: 1, backgroundColor: 'rgba(0,0,0,0.65)', alignItems: 'center', justifyContent: 'center', padding: 30 },
-  bottomHint: { color: 'rgba(255,255,255,0.5)', fontSize: 14, fontWeight: '600', textAlign: 'center' },
-  retryBtn: { backgroundColor: '#F5C842', borderRadius: 14, paddingVertical: 14, paddingHorizontal: 32 },
-  retryBtnText: { fontSize: 15, fontWeight: '900', color: '#1a1a1a' },
+const s = StyleSheet.create({
+  full:{flex:1},
+  dark:{flex:1,backgroundColor:'#111'},
+  center:{flex:1,alignItems:'center',justifyContent:'center',padding:32,gap:16},
+  txt:{fontSize:15,color:'#fff',textAlign:'center'},
+  btn:{backgroundColor:'#F5C842',borderRadius:14,paddingVertical:12,paddingHorizontal:24},
+  btnTxt:{fontSize:14,fontWeight:'900',color:'#1a1a1a'},
+  cancel:{padding:12},
+  cancelTxt:{fontSize:14,color:'rgba(255,255,255,0.5)'},
+  ui:{...StyleSheet.absoluteFillObject,alignItems:'center',justifyContent:'space-between',paddingVertical:70,paddingHorizontal:32},
+  backBtn:{alignSelf:'flex-start',backgroundColor:'rgba(0,0,0,0.5)',borderRadius:20,paddingHorizontal:16,paddingVertical:8},
+  backTxt:{fontSize:15,color:'#fff',fontWeight:'700'},
+  finder:{width:240,height:240},
+  corner:{width:32,height:32,borderColor:'#F5C842',position:'absolute'},
+  tl:{top:0,left:0,borderTopWidth:3,borderLeftWidth:3,borderTopLeftRadius:8},
+  tr:{top:0,right:0,borderTopWidth:3,borderRightWidth:3,borderTopRightRadius:8},
+  bl:{bottom:0,left:0,borderBottomWidth:3,borderLeftWidth:3,borderBottomLeftRadius:8},
+  br:{bottom:0,right:0,borderBottomWidth:3,borderRightWidth:3,borderBottomRightRadius:8},
+  hint:{fontSize:14,color:'rgba(255,255,255,0.8)',fontWeight:'600'},
 });

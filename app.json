@@ -1,41 +1,43 @@
 {
   "expo": {
-    "name": "kela-konnect",
+    "name": "Kela-Konnect",
     "slug": "kela-konnect",
-    "scheme": "kela-konnect",
+    "version": "1.0.0",
+    "orientation": "portrait",
     "icon": "./assets/images/icon.png",
+    "scheme": "exp+kela-konnect",
+    "userInterfaceStyle": "dark",
     "splash": {
-      "image": "./assets/images/splash-icon.png",
+      "image": "./assets/images/splash.png",
       "resizeMode": "contain",
-      "backgroundColor": "#FFDCE6"
+      "backgroundColor": "#1a1a1a"
+    },
+    "android": {
+      "adaptiveIcon": {
+        "foregroundImage": "./assets/images/adaptive-icon.png",
+        "backgroundColor": "#1a1a1a"
+      },
+      "package": "com.anonymous.kelakonnect",
+      "minSdkVersion": 26,
+      "targetSdkVersion": 34,
+      "permissions": [
+        "RECORD_AUDIO",
+        "MODIFY_AUDIO_SETTINGS",
+        "ACCESS_WIFI_STATE",
+        "CHANGE_WIFI_STATE",
+        "ACCESS_FINE_LOCATION",
+        "VIBRATE",
+        "CAMERA"
+      ]
     },
     "plugins": [
+      "expo-router",
       [
-        "expo-splash-screen",
+        "expo-camera",
         {
-          "image": "./assets/images/splash-icon.png",
-          "imageWidth": 400,
-          "resizeMode": "contain",
-          "backgroundColor": "#FFDCE6"
+          "cameraPermissionText": "Camera is needed to scan friend QR codes"
         }
       ]
-    ],
-    "android": {
-      "icon": "./assets/images/icon.png",
-      "adaptiveIcon": {
-        "foregroundImage": "./assets/images/android-icon-foreground.png",
-        "backgroundImage": "./assets/images/android-icon-background.png",
-        "monochromeImage": "./assets/images/android-icon-monochrome.png"
-      },
-      "permissions": [
-        "BLUETOOTH",
-        "BLUETOOTH_ADMIN",
-        "BLUETOOTH_SCAN",
-        "BLUETOOTH_CONNECT",
-        "RECORD_AUDIO",
-        "FOREGROUND_SERVICE"
-      ],
-      "package": "com.anonymous.kelakonnect"
-    }
+    ]
   }
 }

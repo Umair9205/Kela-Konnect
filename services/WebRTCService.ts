@@ -1,162 +1,121 @@
 /**
- * WebRTCService.ts
- *
- * WebRTC peer connection for Kela-Konnect.
- * Transport: WiFi Direct (local network, no STUN/TURN needed)
- * Signaling: TCP socket via WifiDirectModule (port 9875)
- * Audio: DTLS-SRTP encrypted via WebRTC
+ * WebRTCService — manages RTCPeerConnection lifecycle
+ * Audio: DTLS-SRTP (AES-128+) via react-native-webrtc (NFR-14)
+ * Signaling: TCP socket via WifiDirectModule port 9875 (FR-21, FR-22)
+ * No STUN/TURN — WiFi Direct is a local routed network (NFR-16)
  */
-
-import {
-  MediaStream,
-  RTCIceCandidate,
-  RTCPeerConnection,
-  RTCSessionDescription,
-  mediaDevices,
-} from 'react-native-webrtc';
+import { MediaStream, RTCIceCandidate, RTCPeerConnection, RTCSessionDescription, mediaDevices } from 'react-native-webrtc';
+import AudioStream from '../modules/AudioStream';
 import WifiDirect from '../modules/WifiDirect';
 
-type CallRole = 'caller' | 'callee';
-
-interface WebRTCCallbacks {
-  onConnected: () => void;
+export type CallRole = 'caller' | 'callee';
+export interface WebRTCCallbacks {
+  onConnected:    () => void;
   onDisconnected: () => void;
-  onError: (err: string) => void;
+  onError:        (err: string) => void;
 }
 
-// ✅ Cast pc to any for event handlers — known react-native-webrtc TS bug
-// with RN 0.73+ bundler module resolution breaking event-target-shim types.
-// addEventListener works fine at runtime. Tracked: github.com/react-native-webrtc/react-native-webrtc/issues/1544
+// react-native-webrtc has broken TS types for addEventListener due to event-target-shim
+// module resolution with RN 0.73+ bundler mode. Cast to any — works fine at runtime.
 type AnyPC = any;
 
 class WebRTCService {
-  private pc: RTCPeerConnection | null = null;
-  private localStream: MediaStream | null = null;
+  private pc:           RTCPeerConnection | null = null;
+  private localStream:  MediaStream | null = null;
   private remoteStream: MediaStream | null = null;
-  private signalSub: any = null;
-  private role: CallRole = 'caller';
-  private callbacks: WebRTCCallbacks | null = null;
+  private signalSub:    any = null;
+  private callbacks:    WebRTCCallbacks | null = null;
+  private speakerOn:    boolean = false;
 
-  private readonly pcConfig = {
-    iceServers: [],  // No STUN/TURN — WiFi Direct is a local network
-  };
+  // Audio quality bitrate map (FR-16, FR-29)
+  private readonly bitrateMap = { low: 8000, medium: 16000, high: 32000 };
 
-  // ── Public API ─────────────────────────────────────────────────────────────
-
-  async startCall(role: CallRole, callbacks: WebRTCCallbacks): Promise<void> {
-    this.role = role;
+  async startCall(role: CallRole, callbacks: WebRTCCallbacks, speakerDefault = false, quality: 'low'|'medium'|'high' = 'high') {
     this.callbacks = callbacks;
+    this.speakerOn = speakerDefault;
 
     try {
-      await this.initPeerConnection();
-      await this.addLocalAudio();
+      await this.initPC();
+      await this.addLocalAudio(quality);
 
-      // Listen for incoming signals (SDP + ICE) over TCP
-      this.signalSub = WifiDirect.onSignalReceived(({ data }) => {
-        this.handleIncomingSignal(data);
-      });
+      // Single listener — handles both WebRTC signals and avoids duplicates
+      this.signalSub = WifiDirect.onSignalReceived(({ data }) => this.handleSignal(data));
 
-      if (role === 'caller') {
-        await this.createAndSendOffer();
-      }
-      // Callee waits — offer arrives via onSignalReceived
+      if (role === 'caller') await this.sendOffer();
+      // callee waits for offer via handleSignal
     } catch (e: any) {
       callbacks.onError(`WebRTC startCall failed: ${e?.message ?? e}`);
     }
   }
 
   setMuted(muted: boolean) {
-    this.localStream?.getAudioTracks().forEach(track => {
-      track.enabled = !muted;
-    });
+    this.localStream?.getAudioTracks().forEach(t => { t.enabled = !muted; });
+  }
+
+  setSpeaker(on: boolean) {
+    this.speakerOn = on;
+    AudioStream.setSpeakerOn(on);
   }
 
   async stop() {
     this.signalSub?.remove();
     this.signalSub = null;
-
     this.localStream?.getTracks().forEach(t => t.stop());
     this.localStream = null;
     this.remoteStream = null;
-
     this.pc?.close();
     this.pc = null;
-
     this.callbacks = null;
-    console.log('🛑 WebRTC stopped');
+    AudioStream.setSpeakerOn(false); // restore earpiece on call end
   }
 
-  // ── Peer Connection ────────────────────────────────────────────────────────
+  private async initPC() {
+    this.pc = new RTCPeerConnection({ iceServers: [] });
+    const pc = this.pc as AnyPC;
 
-  private async initPeerConnection() {
-    this.pc = new RTCPeerConnection(this.pcConfig);
-    const pc = this.pc as AnyPC; // ✅ bypass broken TS types for event handlers
-
-    pc.addEventListener('icecandidate', (event: any) => {
-      if (!event.candidate) return; // null = gathering complete
-      const msg = JSON.stringify({
-        type: 'ice-candidate',
-        candidate: event.candidate.toJSON(),
-      });
-      WifiDirect.sendSignal(msg).catch((e: any) => console.warn('ICE send failed:', e));
+    pc.addEventListener('icecandidate', (e: any) => {
+      if (!e.candidate) return;
+      WifiDirect.sendSignal(JSON.stringify({ type: 'ice-candidate', candidate: e.candidate.toJSON() }))
+        .catch(err => console.warn('ICE send failed:', err));
     });
 
     pc.addEventListener('connectionstatechange', () => {
       const state = (this.pc as AnyPC)?.connectionState;
-      console.log(`🔗 Connection state: ${state}`);
-      switch (state) {
-        case 'connected':
-          this.callbacks?.onConnected();
-          break;
-        case 'disconnected':
-        case 'failed':
-        case 'closed':
-          this.callbacks?.onDisconnected();
-          break;
+      console.log('WebRTC connection:', state);
+      if (state === 'connected') {
+        AudioStream.setSpeakerOn(this.speakerOn);
+        this.callbacks?.onConnected();
+      } else if (state === 'disconnected' || state === 'failed' || state === 'closed') {
+        this.callbacks?.onDisconnected();
       }
     });
 
     pc.addEventListener('iceconnectionstatechange', () => {
-      console.log(`🧊 ICE state: ${(this.pc as AnyPC)?.iceConnectionState}`);
+      console.log('ICE state:', (this.pc as AnyPC)?.iceConnectionState);
     });
 
-    // Receive remote audio track
-    pc.addEventListener('track', (event: any) => {
-      console.log('🔊 Remote track received');
-      if (!this.remoteStream) {
-        this.remoteStream = new MediaStream();
-      }
-      this.remoteStream!.addTrack(event.track);
+    // Remote audio track arrives here — react-native-webrtc plays it automatically
+    pc.addEventListener('track', (e: any) => {
+      console.log('Remote track received');
+      if (!this.remoteStream) this.remoteStream = new MediaStream();
+      this.remoteStream!.addTrack(e.track);
     });
-
-    console.log('✅ RTCPeerConnection initialized');
   }
 
-  private async addLocalAudio() {
+  private async addLocalAudio(quality: 'low'|'medium'|'high') {
     this.localStream = await mediaDevices.getUserMedia({
-      audio: {
-        echoCancellation: true,
-        noiseSuppression: true,
-        sampleRate: 16000,
-      },
+      audio: { echoCancellation: true, noiseSuppression: true, sampleRate: this.bitrateMap[quality] },
       video: false,
     });
-
-    this.localStream.getTracks().forEach(track => {
-      (this.pc as AnyPC).addTrack(track, this.localStream!);
-    });
-
-    console.log('🎙️ Local audio track added');
+    this.localStream.getTracks().forEach(t => (this.pc as AnyPC).addTrack(t, this.localStream!));
   }
 
-  // ── Offer / Answer ─────────────────────────────────────────────────────────
-
-  private async createAndSendOffer() {
+  private async sendOffer() {
     if (!this.pc) return;
     const offer = await this.pc.createOffer({ offerToReceiveAudio: true } as any);
     await this.pc.setLocalDescription(offer);
     await WifiDirect.sendSignal(JSON.stringify({ type: 'sdp-offer', sdp: offer }));
-    console.log('📤 SDP offer sent');
+    console.log('SDP offer sent');
   }
 
   private async handleOffer(sdp: any) {
@@ -165,46 +124,30 @@ class WebRTCService {
     const answer = await this.pc.createAnswer();
     await this.pc.setLocalDescription(answer);
     await WifiDirect.sendSignal(JSON.stringify({ type: 'sdp-answer', sdp: answer }));
-    console.log('📤 SDP answer sent');
+    console.log('SDP answer sent');
   }
 
   private async handleAnswer(sdp: any) {
     if (!this.pc) return;
     await this.pc.setRemoteDescription(new RTCSessionDescription(sdp));
-    console.log('✅ Remote SDP answer set');
+    console.log('Remote SDP set');
   }
 
-  private async handleIceCandidate(candidate: any) {
+  private async handleIce(candidate: any) {
     if (!this.pc) return;
-    try {
-      await this.pc.addIceCandidate(new RTCIceCandidate(candidate));
-    } catch (e) {
-      console.warn('addIceCandidate error:', e);
-    }
+    try { await this.pc.addIceCandidate(new RTCIceCandidate(candidate)); }
+    catch (e) { console.warn('addIceCandidate:', e); }
   }
 
-  // ── Signal Handler ─────────────────────────────────────────────────────────
-
-  private handleIncomingSignal(raw: string) {
+  private handleSignal(raw: string) {
     try {
       const msg = JSON.parse(raw);
       switch (msg.type) {
-        case 'sdp-offer':
-          console.log('📥 SDP offer received');
-          this.handleOffer(msg.sdp);
-          break;
-        case 'sdp-answer':
-          console.log('📥 SDP answer received');
-          this.handleAnswer(msg.sdp);
-          break;
-        case 'ice-candidate':
-          this.handleIceCandidate(msg.candidate);
-          break;
-        // call-request/accept/reject/end handled by CallSignaling, not here
+        case 'sdp-offer':     this.handleOffer(msg.sdp); break;
+        case 'sdp-answer':    this.handleAnswer(msg.sdp); break;
+        case 'ice-candidate': this.handleIce(msg.candidate); break;
       }
-    } catch (_) {
-      // Not JSON or not a WebRTC signal
-    }
+    } catch (_) { /* non-WebRTC signal, ignore */ }
   }
 }
 

@@ -1,163 +1,119 @@
+/**
+ * (tabs)/index.tsx — Home screen dashboard
+ */
 import { router } from 'expo-router';
-import { useEffect, useRef } from 'react';
-import {
-  Animated, ImageBackground, StatusBar,
-  StyleSheet, Text, TouchableOpacity, View,
-} from 'react-native';
+import { ImageBackground, ScrollView, StatusBar, StyleSheet, Text, TouchableOpacity, View } from 'react-native';
 import { useAppStore } from '../../store/appStore';
 
 const BG = require('../../assets/images/banana-bg.png');
 
-const CARDS = [
-  { href: '/discover', icon: '📡', label: 'Discover',  sub: 'Find nearby users',   tag: 'SCAN',     primary: true  },
-  { href: '/friends',  icon: '👥', label: 'Friends',   sub: 'Manage your contacts', tag: 'CONTACTS', primary: false },
-  { href: '/qr-code',  icon: '📱', label: 'My QR',     sub: 'Share your identity',  tag: 'IDENTITY', primary: false },
-];
+interface CardProps {
+  icon: string; title: string; desc: string; onPress: () => void; accent?: string;
+}
+function Card({ icon, title, desc, onPress, accent='#F5C842' }: CardProps) {
+  return (
+    <TouchableOpacity style={c.card} onPress={onPress} accessibilityRole="button" accessibilityLabel={title}>
+      <View style={[c.cardIcon, {backgroundColor: accent+'22', borderColor: accent+'33'}]}>
+        <Text style={c.cardIconTxt}>{icon}</Text>
+      </View>
+      <Text style={c.cardTitle}>{title}</Text>
+      <Text style={c.cardDesc}>{desc}</Text>
+    </TouchableOpacity>
+  );
+}
 
 export default function HomeScreen() {
-  const loadData = useAppStore(s => s.loadData);
-  const myName   = useAppStore(s => s.myDeviceName);
-  const friends  = useAppStore(s => s.friends);
+  const myName     = useAppStore(s => s.myDeviceName);
+  const friends    = useAppStore(s => s.friends);
+  const history    = useAppStore(s => s.callHistory);
+  const isSetupDone = useAppStore(s => s.isSetupDone);
 
-  const headerO   = useRef(new Animated.Value(0)).current;
-  const cardAnims = useRef(CARDS.map(() => new Animated.Value(0))).current;
-  const pulse     = useRef(new Animated.Value(1)).current;
+  const recentFriends = friends.filter(f => f.lastSeen).sort((a,b) =>
+    (b.lastSeen?.getTime()??0) - (a.lastSeen?.getTime()??0)
+  ).slice(0,3);
 
-  useEffect(() => {
-    loadData();
-    Animated.timing(headerO, { toValue: 1, duration: 500, useNativeDriver: true }).start();
-    Animated.stagger(80, cardAnims.map(a =>
-      Animated.spring(a, { toValue: 1, tension: 60, friction: 10, useNativeDriver: true })
-    )).start();
-    Animated.loop(Animated.sequence([
-      Animated.timing(pulse, { toValue: 1.9, duration: 950, useNativeDriver: true }),
-      Animated.timing(pulse, { toValue: 1,   duration: 950, useNativeDriver: true }),
-    ])).start();
-  }, []);
-
-  const nearby = friends.filter(f => !!f.currentMac).length;
+  const missedCalls = history.filter(r => r.outcome === 'missed').length;
 
   return (
-    <ImageBackground source={BG} style={styles.bg} resizeMode="cover">
+    <ImageBackground source={BG} style={c.bg} resizeMode="cover">
       <StatusBar barStyle="light-content" />
-      <View style={styles.overlay}>
-
-        <Animated.View style={[styles.header, { opacity: headerO }]}>
-          <View>
-            <Text style={styles.eyebrow}>KELA-KONNECT</Text>
-            <Text style={styles.headline}>Home</Text>
+      <ScrollView style={c.scroll} showsVerticalScrollIndicator={false}>
+        <View style={c.top}>
+          <Text style={c.eyebrow}>KELA-KONNECT</Text>
+          <Text style={c.welcome}>Hello, {myName ?? 'there'} 👋</Text>
+          <Text style={c.sub}>Offline P2P voice calling</Text>
+          <View style={c.statsRow}>
+            <View style={c.stat}><Text style={c.statNum}>{friends.length}</Text><Text style={c.statLbl}>Friends</Text></View>
+            <View style={c.statDiv} />
+            <View style={c.stat}><Text style={c.statNum}>{history.length}</Text><Text style={c.statLbl}>Calls</Text></View>
+            <View style={c.statDiv} />
+            <View style={c.stat}><Text style={[c.statNum, missedCalls>0 && {color:'#F87171'}]}>{missedCalls}</Text><Text style={c.statLbl}>Missed</Text></View>
           </View>
-          <View style={styles.pill}>
-            <View style={styles.dotWrap}>
-              <Animated.View style={[styles.dotRing, { transform: [{ scale: pulse }] }]} />
-              <View style={[styles.dot, myName ? styles.dotOn : styles.dotOff]} />
-            </View>
-            <Text style={styles.pillName} numberOfLines={1}>{myName ?? 'Not set up'}</Text>
-            {friends.length > 0 && (
-              <View style={styles.friendsBadge}>
-                <Text style={styles.friendsBadgeText}>Friends</Text>
-                <View style={styles.friendsDivider} />
-                <Text style={styles.friendsBadgeNum}>{friends.length}</Text>
-              </View>
-            )}
-          </View>
-        </Animated.View>
-
-        <View style={styles.cardList}>
-          {CARDS.map((card, i) => (
-            <Animated.View
-              key={card.href}
-              style={[
-                styles.cardAnimWrap,
-                {
-                  opacity: cardAnims[i],
-                  transform: [{
-                    translateY: cardAnims[i].interpolate({
-                      inputRange: [0, 1], outputRange: [20, 0],
-                    }),
-                  }],
-                },
-              ]}
-            >
-              <TouchableOpacity
-                activeOpacity={0.74}
-                style={[styles.card, card.primary && styles.cardPrimary]}
-                onPress={() => router.push(card.href as any)}
-              >
-                <View style={[styles.iconBox, card.primary && styles.iconBoxPrimary]}>
-                  <Text style={styles.iconEmoji}>{card.icon}</Text>
-                </View>
-                <View style={styles.textCol}>
-                  <View style={[styles.tagChip, card.primary && styles.tagChipPrimary]}>
-                    <Text style={[styles.tagChipText, card.primary && styles.tagChipTextPrimary]}>
-                      {card.tag}
-                    </Text>
-                  </View>
-                  <Text style={[styles.cardLabel, card.primary && styles.cardLabelPrimary]}>
-                    {card.label}
-                  </Text>
-                  <Text style={[styles.cardSub, card.primary && styles.cardSubPrimary]}>
-                    {card.sub}
-                  </Text>
-                  {card.primary && nearby > 0 && (
-                    <Text style={styles.nearbyText}>● {nearby} nearby now</Text>
-                  )}
-                </View>
-                <View style={[styles.arrow, card.primary && styles.arrowPrimary]}>
-                  <Text style={[styles.arrowText, card.primary && styles.arrowTextPrimary]}>→</Text>
-                </View>
-              </TouchableOpacity>
-            </Animated.View>
-          ))}
         </View>
 
-        <Animated.View style={[styles.footer, { opacity: headerO }]}>
-          <Text style={styles.footerText}>WiFi Direct · WebRTC · No Internet Required</Text>
-        </Animated.View>
+        <View style={c.grid}>
+          <Card icon="📡" title="Discover"   desc="Find nearby users"     onPress={() => router.push('/discover')} />
+          <Card icon="👥" title="Friends"    desc={`${friends.length} contacts`} onPress={() => router.push('/friends')} />
+          <Card icon="📋" title="History"    desc="Recent calls"          onPress={() => router.push('/history')} accent="#4ADE80" />
+          <Card icon="📷" title="My QR"      desc="Share your contact"    onPress={() => router.push('/qr-code')} accent="#60A5FA" />
+          <Card icon="⚙️"  title="Settings"  desc="Audio & preferences"   onPress={() => router.push('/settings')} accent="#A78BFA" />
+          <Card icon="➕" title="Add Friend" desc="Scan QR code"          onPress={() => router.push('/qr-scanner')} accent="#F87171" />
+        </View>
 
-      </View>
+        {recentFriends.length > 0 && (
+          <View style={c.section}>
+            <Text style={c.sectionTitle}>RECENTLY SEEN</Text>
+            {recentFriends.map(f => (
+              <TouchableOpacity
+                key={f.uuid}
+                style={c.friendRow}
+                onPress={() => router.push({ pathname:'/call', params:{ friendName:f.name, friendUUID:f.uuid } })}
+                accessibilityRole="button"
+                accessibilityLabel={`Call ${f.name}`}
+              >
+                <View style={c.fAvatar}><Text style={c.fAvatarTxt}>{f.name[0]?.toUpperCase()}</Text></View>
+                <View style={c.fInfo}>
+                  <Text style={c.fName}>{f.name}</Text>
+                  <Text style={c.fMeta}>{f.currentMac || 'No MAC yet'}</Text>
+                </View>
+                <Text style={c.fCall}>📞</Text>
+              </TouchableOpacity>
+            ))}
+          </View>
+        )}
+
+        <View style={c.footer}>
+          <Text style={c.footerTxt}>No internet required · DTLS-SRTP encrypted · No servers</Text>
+        </View>
+      </ScrollView>
     </ImageBackground>
   );
 }
 
-const styles = StyleSheet.create({
-  bg: { flex: 1 },
-  overlay: { flex: 1, backgroundColor: 'rgba(0,0,0,0.48)', paddingTop: 62, paddingBottom: 28, paddingHorizontal: 20, justifyContent: 'space-between', alignSelf: 'stretch' },
-  header: { flexDirection: 'row', alignItems: 'flex-end', justifyContent: 'space-between', marginBottom: 8 },
-  eyebrow: { fontSize: 10, fontWeight: '700', letterSpacing: 3, color: 'rgba(255,255,255,0.45)', marginBottom: 4 },
-  headline: { fontSize: 36, fontWeight: '900', color: '#F5C842', letterSpacing: -1 },
-  pill: { flexDirection: 'row', alignItems: 'center', gap: 7, backgroundColor: 'rgba(14,14,14,0.85)', borderWidth: 1, borderColor: 'rgba(255,255,255,0.08)', borderRadius: 40, paddingHorizontal: 12, paddingVertical: 8, maxWidth: 190 },
-  dotWrap: { width: 10, height: 10, alignItems: 'center', justifyContent: 'center' },
-  dotRing: { position: 'absolute', width: 10, height: 10, borderRadius: 5, backgroundColor: 'rgba(74,222,128,0.3)' },
-  dot: { width: 6, height: 6, borderRadius: 3 },
-  dotOn: { backgroundColor: '#4ADE80' },
-  dotOff: { backgroundColor: 'rgba(255,255,255,0.25)' },
-  pillName: { fontSize: 11, fontWeight: '700', color: '#fff', flexShrink: 1 },
-  friendsBadge: { flexDirection: 'row', alignItems: 'center', gap: 5, backgroundColor: '#F5C842', borderRadius: 10, paddingHorizontal: 8, paddingVertical: 3 },
-  friendsBadgeText: { fontSize: 9, fontWeight: '800', color: '#1a1a1a' },
-  friendsDivider: { width: 1, height: 9, backgroundColor: 'rgba(26,26,26,0.3)' },
-  friendsBadgeNum: { fontSize: 10, fontWeight: '900', color: '#1a1a1a' },
-  cardList: { flex: 1, justifyContent: 'center', gap: 12 },
-  cardAnimWrap: { width: '100%' },
-  card: { flexDirection: 'row', alignItems: 'center', backgroundColor: 'rgba(12,12,12,0.84)', borderWidth: 1, borderColor: 'rgba(255,255,255,0.07)', borderRadius: 22, padding: 16, shadowColor: '#000', shadowOffset: { width: 0, height: 8 }, shadowOpacity: 0.45, shadowRadius: 16, elevation: 12 },
-  cardPrimary: { backgroundColor: '#F5C842', borderColor: 'transparent', shadowColor: '#F5C842', shadowOpacity: 0.3 },
-  iconBox: { width: 52, height: 52, borderRadius: 16, backgroundColor: 'rgba(255,255,255,0.07)', borderWidth: 1, borderColor: 'rgba(255,255,255,0.08)', alignItems: 'center', justifyContent: 'center', marginRight: 14, flexShrink: 0 },
-  iconBoxPrimary: { backgroundColor: 'rgba(26,26,26,0.12)', borderColor: 'rgba(26,26,26,0.08)' },
-  iconEmoji: { fontSize: 26 },
-  textCol: { flex: 1, gap: 3 },
-  tagChip: { alignSelf: 'flex-start', backgroundColor: 'rgba(245,200,66,0.12)', borderWidth: 1, borderColor: 'rgba(245,200,66,0.22)', borderRadius: 5, paddingHorizontal: 6, paddingVertical: 2, marginBottom: 2 },
-  tagChipPrimary: { backgroundColor: 'rgba(26,26,26,0.12)', borderColor: 'rgba(26,26,26,0.15)' },
-  tagChipText: { fontSize: 8, fontWeight: '900', letterSpacing: 1.2, color: '#F5C842' },
-  tagChipTextPrimary: { color: 'rgba(26,26,26,0.5)' },
-  cardLabel: { fontSize: 18, fontWeight: '900', color: '#fff', letterSpacing: -0.3 },
-  cardLabelPrimary: { color: '#1a1a1a' },
-  cardSub: { fontSize: 12, fontWeight: '600', color: 'rgba(255,255,255,0.38)' },
-  cardSubPrimary: { color: 'rgba(26,26,26,0.52)' },
-  nearbyText: { fontSize: 11, fontWeight: '700', color: 'rgba(26,26,26,0.6)', marginTop: 2 },
-  arrow: { width: 34, height: 34, borderRadius: 11, backgroundColor: 'rgba(255,255,255,0.06)', borderWidth: 1, borderColor: 'rgba(255,255,255,0.09)', alignItems: 'center', justifyContent: 'center', marginLeft: 10, flexShrink: 0 },
-  arrowPrimary: { backgroundColor: 'rgba(26,26,26,0.12)', borderColor: 'rgba(26,26,26,0.08)' },
-  arrowText: { fontSize: 16, color: 'rgba(255,255,255,0.45)', fontWeight: '700' },
-  arrowTextPrimary: { color: 'rgba(26,26,26,0.5)' },
-  footer: { alignItems: 'center', paddingTop: 8 },
-  footerText: { fontSize: 10, fontWeight: '700', letterSpacing: 2, color: 'rgba(255,255,255,0.16)', textTransform: 'uppercase' },
+const c = StyleSheet.create({
+  bg:{flex:1}, scroll:{flex:1},
+  top:{paddingTop:70,paddingHorizontal:24,paddingBottom:24,backgroundColor:'rgba(0,0,0,0.4)'},
+  eyebrow:{fontSize:10,fontWeight:'700',letterSpacing:4,color:'rgba(255,255,255,0.4)',marginBottom:6},
+  welcome:{fontSize:30,fontWeight:'900',color:'#fff',letterSpacing:-0.5},
+  sub:{fontSize:14,color:'rgba(255,255,255,0.4)',marginTop:4,fontWeight:'600'},
+  statsRow:{flexDirection:'row',alignItems:'center',backgroundColor:'rgba(255,255,255,0.05)',borderRadius:16,padding:16,marginTop:20,borderWidth:1,borderColor:'rgba(255,255,255,0.08)'},
+  stat:{flex:1,alignItems:'center'},
+  statNum:{fontSize:24,fontWeight:'900',color:'#F5C842'},
+  statLbl:{fontSize:11,color:'rgba(255,255,255,0.4)',fontWeight:'600',marginTop:2},
+  statDiv:{width:1,height:32,backgroundColor:'rgba(255,255,255,0.08)'},
+  grid:{flexDirection:'row',flexWrap:'wrap',gap:12,padding:16,backgroundColor:'rgba(0,0,0,0.15)'},
+  card:{width:'47%',backgroundColor:'rgba(15,15,15,0.85)',borderRadius:20,padding:18,borderWidth:1,borderColor:'rgba(255,255,255,0.07)',gap:8},
+  cardIcon:{width:44,height:44,borderRadius:14,alignItems:'center',justifyContent:'center',borderWidth:1},
+  cardIconTxt:{fontSize:22},
+  cardTitle:{fontSize:15,fontWeight:'900',color:'#fff'},
+  cardDesc:{fontSize:12,color:'rgba(255,255,255,0.35)'},
+  section:{paddingHorizontal:16,paddingBottom:8,backgroundColor:'rgba(0,0,0,0.15)'},
+  sectionTitle:{fontSize:10,fontWeight:'800',letterSpacing:2,color:'rgba(255,255,255,0.3)',marginBottom:10,paddingHorizontal:4},
+  friendRow:{flexDirection:'row',alignItems:'center',gap:12,backgroundColor:'rgba(15,15,15,0.82)',borderRadius:16,padding:12,marginBottom:8,borderWidth:1,borderColor:'rgba(255,255,255,0.06)'},
+  fAvatar:{width:40,height:40,borderRadius:12,backgroundColor:'#F5C842',alignItems:'center',justifyContent:'center'},
+  fAvatarTxt:{fontSize:18,fontWeight:'900',color:'#1a1a1a'},
+  fInfo:{flex:1}, fName:{fontSize:14,fontWeight:'800',color:'#fff'}, fMeta:{fontSize:11,color:'rgba(255,255,255,0.3)'},
+  fCall:{fontSize:20,padding:4},
+  footer:{padding:24,alignItems:'center',backgroundColor:'rgba(0,0,0,0.2)'},
+  footerTxt:{fontSize:11,color:'rgba(255,255,255,0.2)',textAlign:'center',lineHeight:18,fontWeight:'600'},
 });
