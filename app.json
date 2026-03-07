@@ -7,6 +7,7 @@
     "icon": "./assets/images/icon.png",
     "scheme": "exp+kela-konnect",
     "userInterfaceStyle": "dark",
+    "newArchEnabled": false,
     "splash": {
       "image": "./assets/images/splash-icon.png",
       "resizeMode": "contain",
@@ -21,13 +22,13 @@
       "minSdkVersion": 26,
       "targetSdkVersion": 34,
       "permissions": [
-        "RECORD_AUDIO",
-        "MODIFY_AUDIO_SETTINGS",
-        "ACCESS_WIFI_STATE",
-        "CHANGE_WIFI_STATE",
-        "ACCESS_FINE_LOCATION",
-        "VIBRATE",
-        "CAMERA"
+        "android.permission.RECORD_AUDIO",
+        "android.permission.MODIFY_AUDIO_SETTINGS",
+        "android.permission.ACCESS_WIFI_STATE",
+        "android.permission.CHANGE_WIFI_STATE",
+        "android.permission.ACCESS_FINE_LOCATION",
+        "android.permission.VIBRATE",
+        "android.permission.CAMERA"
       ]
     },
     "plugins": [

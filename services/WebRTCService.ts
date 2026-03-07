@@ -104,9 +104,13 @@ class WebRTCService {
 
   private async addLocalAudio(quality: 'low'|'medium'|'high') {
     this.localStream = await mediaDevices.getUserMedia({
-      audio: { echoCancellation: true, noiseSuppression: true, sampleRate: this.bitrateMap[quality] },
+      audio: {
+        echoCancellation: true,
+        noiseSuppression: true,
+        sampleRate: this.bitrateMap[quality],
+      } as any,
       video: false,
-    });
+    } as any);
     this.localStream.getTracks().forEach(t => (this.pc as AnyPC).addTrack(t, this.localStream!));
   }
 
