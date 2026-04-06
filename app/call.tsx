@@ -10,7 +10,7 @@
  */
 import { router, useLocalSearchParams } from 'expo-router';
 import { useEffect, useRef, useState } from 'react';
-import { ImageBackground, StatusBar, StyleSheet, Text, TouchableOpacity, View } from 'react-native';
+import { Alert, ImageBackground, PermissionsAndroid, Platform, StatusBar, StyleSheet, Text, TouchableOpacity, View } from 'react-native';
 import WifiDirect from '../modules/WifiDirect';
 import signalingManager from '../services/CallSignaling';
 import webRTCService from '../services/WebRTCService';
@@ -44,6 +44,22 @@ export default function CallScreen() {
 
   const startCall = async () => {
     try {
+      // Request all required permissions
+      if (Platform.OS === 'android') {
+        const grants = await PermissionsAndroid.requestMultiple([
+          PermissionsAndroid.PERMISSIONS.RECORD_AUDIO,
+          PermissionsAndroid.PERMISSIONS.BLUETOOTH_SCAN,
+          PermissionsAndroid.PERMISSIONS.BLUETOOTH_ADVERTISE,
+          PermissionsAndroid.PERMISSIONS.BLUETOOTH_CONNECT,
+          PermissionsAndroid.PERMISSIONS.ACCESS_FINE_LOCATION,
+        ]);
+        const denied = Object.values(grants).some(r => r !== PermissionsAndroid.RESULTS.GRANTED);
+        if (denied) {
+          Alert.alert('Permissions required', 'Bluetooth and microphone permissions are needed for calls.');
+          cleanup('failed');
+          return;
+        }
+      }
       setStatus('Creating WiFi Direct group...');
       setState('creating-group');
       await WifiDirect.createGroup();
